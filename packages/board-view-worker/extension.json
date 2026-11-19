@@ -1,0 +1,45 @@
+{
+  "id": "builtin.board-view",
+  "name": "Boards",
+  "icon": "media/chat.svg",
+  "workerName": "Board View Worker",
+  "description": "Independent boards for LVCE Editor",
+  "repository": "https://github.com/lvce-editor/board-view-worker",
+  "browser": "dist/boardWorkerMain.js",
+  "contentSecurityPolicy": [
+    "default-src 'none'",
+    "script-src 'self'",
+    "img-src data:",
+    "connect-src https: wss: http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*"
+  ],
+  "isolated": true,
+  "categories": ["Other"],
+  "configuration": {
+    "chat2.connectedBoardIds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Remembered Trello board IDs. API keys and tokens are never stored here."
+    }
+  },
+  "activation": ["onCommand:chat2.showBoardLayout", "onView:chat2.views.board"],
+  "commands": [
+    {
+      "id": "chat2.showBoardLayout",
+      "label": "View: Open Board Layout"
+    }
+  ],
+  "views": [
+    {
+      "css": "media/board.css",
+      "displayName": "Boards",
+      "id": "chat2.views.board",
+      "title": "Boards",
+      "icon": "media/chat.svg",
+      "kind": "virtualDom",
+      "showSideBarHeader": false
+    }
+  ]
+}

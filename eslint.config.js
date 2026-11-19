@@ -1,0 +1,56 @@
+import { defineConfig } from 'eslint/config'
+import * as config from '@lvce-editor/eslint-config'
+
+export default defineConfig([
+  { ignores: ['**/.test-with-playwright/**'] },
+  ...config.default,
+  ...config.recommendedVirtualDom,
+  ...config.recommendedRegex,
+  ...config.recommendedTsconfig,
+  ...config.recommendedActions,
+  {
+    files: ['.github/workflows/release.yml'],
+    rules: { 'github-actions/no-e2e-in-release': 'off' },
+  },
+  {
+    rules: {
+      'github-actions/ci-versions': 'off',
+      'github-actions/action-versions': 'off',
+      'sonarjs/void-use': 'off',
+    },
+  },
+  {
+    files: ['**/test/**/*.ts'],
+    rules: {
+      'virtual-dom/no-object-attribute-values': 'off',
+      'virtual-dom/prefer-merge-class-names': 'off',
+      'virtual-dom/prefer-state-destructuring': 'off',
+    },
+  },
+  {
+    files: [
+      'packages/extension/src/parts/AgentChatApi/AgentChatApi.ts',
+      'packages/extension/src/parts/ComputerUseToolHost/ComputerUseToolHost.ts',
+      'packages/extension/src/parts/MockChatApi/MockChatApi.ts',
+      'packages/node/src/computerUseClient.js',
+    ],
+    rules: {
+      'virtual-dom/no-object-attribute-values': 'off',
+    },
+  },
+  {
+    files: [
+      'packages/extension/src/parts/ChatFocusMode/ChatFocusMode.ts',
+      'packages/extension/src/parts/ChatView/CreateInstance.ts',
+      'packages/board-view-worker/src/parts/Main/Main.ts',
+    ],
+    rules: {
+      'virtual-dom/prefer-state-destructuring': 'off',
+    },
+  },
+  {
+    rules: {
+      '@typescript-eslint/no-deprecated': 'off',
+    },
+  },
+])

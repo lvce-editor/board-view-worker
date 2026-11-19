@@ -1,0 +1,72 @@
+name: release
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+permissions:
+  contents: read
+jobs:
+  build-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: 0
+      GIT_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run type-check
+      - run: npm run lint
+      - run: npx playwright install chromium --with-deps
+      - run: npm run e2e:headless
+      - run: npm run check:package
+      - uses: actions/upload-artifact@v6
+        if: matrix.os == 'ubuntu-24.04'
+        with:
+          name: release
+          path: |
+            dist/
+            extension.tar.br
+  publish-github:
+    needs: build-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: release
+          path: release
+      - name: Name release archive
+        run: mv release/extension.tar.br board-view-worker-${{ github.ref_name }}.tar.br
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: board-view-worker-${{ github.ref_name }}.tar.br
+  publish-npm:
+    needs: [build-release, publish-github]
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: release
+          path: release
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26.12.1'
+          registry-url: https://registry.npmjs.org
+      - run: npm publish --access public --provenance
+        # eslint-disable-next-line github-actions/working-directory
+        working-directory: release/dist
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
