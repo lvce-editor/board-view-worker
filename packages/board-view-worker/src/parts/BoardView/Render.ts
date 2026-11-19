@@ -13,7 +13,6 @@ import type {
   TrelloSearchResult,
 } from './Trello.ts'
 import * as Dom from '../VirtualDom/VirtualDom.ts'
-import { renderDescriptionMarkdown } from './DescriptionMarkdown.ts'
 
 const primaryButtonClass = mergeClassNames('BoardButton', 'BoardPrimaryButton')
 const cardButtonClass = mergeClassNames('BoardCard', 'BoardCardButton')
@@ -39,6 +38,8 @@ export interface BoardState {
   readonly boards: readonly TrelloBoardSummary[]
   readonly cardDraft?: CardDraft | undefined
   readonly connectedIds: readonly string[]
+  readonly descriptionError?: string | undefined
+  readonly descriptionRendering?: boolean
   readonly details?: CardDetails | undefined
   readonly detailsError?: string | undefined
   readonly detailsLoading?: boolean
@@ -53,6 +54,8 @@ export interface BoardState {
   readonly loading: boolean
   readonly optionsOpen?: boolean
   readonly providerSelected: boolean
+  readonly renderedDescription?: Dom.Node | undefined
+  readonly renderedDescriptionText?: string | undefined
   readonly savingCard?: boolean
   readonly searchError?: BoardError | undefined
   readonly searchLoading?: boolean
@@ -481,6 +484,32 @@ const renderActivity = (state: BoardState): Dom.Node => {
   )
 }
 
+const renderDescriptionPreview = (state: BoardState): Dom.Node => {
+  const {
+    descriptionError,
+    descriptionRendering,
+    editDesc,
+    renderedDescription,
+    renderedDescriptionText,
+  } = state
+  if (!editDesc)
+    return Dom.div('BoardDetailEmpty', [Dom.textNode('No description')])
+  if (renderedDescriptionText === editDesc && renderedDescription)
+    return renderedDescription
+  if (descriptionRendering)
+    return Dom.div('BoardDescriptionStatus', [
+      Dom.textNode('Rendering preview…'),
+    ])
+  if (!descriptionError)
+    return Dom.div('BoardDescriptionStatus', [
+      Dom.textNode('Preparing preview…'),
+    ])
+  return Dom.div('BoardDescriptionStatus', [
+    Dom.textNode(descriptionError),
+    Dom.button('board-description-retry', 'Try again', 'BoardButton'),
+  ])
+}
+
 const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
   const {
     board,
@@ -564,13 +593,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                         ],
                       ),
                     ]
-                  : [
-                      editDesc
-                        ? renderDescriptionMarkdown(editDesc)
-                        : Dom.div('BoardDetailEmpty', [
-                            Dom.textNode('No description'),
-                          ]),
-                    ]),
+                  : [renderDescriptionPreview(state)]),
               ],
             ),
             Dom.node(
