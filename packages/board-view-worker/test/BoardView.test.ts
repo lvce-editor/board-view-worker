@@ -7,6 +7,7 @@ import {
   createInstance,
   type BoardHost,
 } from '../src/parts/BoardView/BoardView.ts'
+import { renderDescriptionMarkdown } from '../src/parts/BoardView/DescriptionMarkdown.ts'
 import { render } from '../src/parts/BoardView/Render.ts'
 import { TrelloError, type TrelloBoard } from '../src/parts/BoardView/Trello.ts'
 
@@ -60,6 +61,9 @@ const createHost = (): BoardHost => ({
   loadCovers: jest.fn<BoardHost['loadCovers']>().mockResolvedValue([]),
   moveCard: jest.fn<BoardHost['moveCard']>().mockResolvedValue(undefined),
   read: jest.fn<BoardHost['read']>().mockResolvedValue([]),
+  renderDescriptionMarkdown: jest
+    .fn<BoardHost['renderDescriptionMarkdown']>()
+    .mockImplementation(async (text) => renderDescriptionMarkdown(text)),
   revoke: jest.fn<BoardHost['revoke']>().mockResolvedValue(undefined),
   search: jest.fn<BoardHost['search']>().mockResolvedValue([]),
   session: createSession(),
@@ -918,6 +922,7 @@ test('renders Markdown descriptions safely with images and safe links', async ()
   await flush()
   await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
   await flush()
+  await flush()
   const dom = JSON.stringify(await view.render())
   expect(dom).toContain('BoardDescriptionMarkdown')
   expect(dom).toContain('BoardDescriptionImage')
@@ -925,6 +930,77 @@ test('renders Markdown descriptions safely with images and safe links', async ()
   expect(dom).toContain('https://example.com')
   expect(dom).toContain(' <script>alert(1)</script> ')
   expect(dom).not.toContain('"href":"javascript:')
+  view.dispose?.()
+})
+
+test('does not start the description worker until a description preview is used', async () => {
+  const host = createHost()
+  const view = await createInstance(createContext(), host)
+  expect(host.renderDescriptionMarkdown).not.toHaveBeenCalled()
+  await view.handleEvent?.({
+    name: 'board-id',
+    type: 'input',
+    value: '5k8NLHLh',
+  })
+  await view.handleEvent?.({ name: 'board-connect', type: 'submit' })
+  await flush()
+  expect(host.renderDescriptionMarkdown).not.toHaveBeenCalled()
+  await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
+  await flush()
+  await flush()
+  expect(host.renderDescriptionMarkdown).toHaveBeenCalledTimes(1)
+  view.dispose?.()
+})
+
+test('discards a description result after switching cards', async () => {
+  const host = createHost()
+  const pending =
+    Promise.withResolvers<
+      Awaited<ReturnType<BoardHost['renderDescriptionMarkdown']>>
+    >()
+  jest.mocked(host.renderDescriptionMarkdown).mockReturnValue(pending.promise)
+  const view = await createInstance(createContext(), host)
+  await view.handleEvent?.({
+    name: 'board-id',
+    type: 'input',
+    value: '5k8NLHLh',
+  })
+  await view.handleEvent?.({ name: 'board-connect', type: 'submit' })
+  await flush()
+  await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
+  await flush()
+  await view.handleEvent?.({ name: 'board-card-cancel', type: 'click' })
+  pending.resolve(renderDescriptionMarkdown('stale description'))
+  await flush()
+  expect(JSON.stringify(await view.render())).not.toContain('stale description')
+  view.dispose?.()
+})
+
+test('recovers when the description worker rejects a conversion', async () => {
+  const host = createHost()
+  jest
+    .mocked(host.renderDescriptionMarkdown)
+    .mockRejectedValueOnce(new Error('worker failed'))
+    .mockImplementation(async (text) => renderDescriptionMarkdown(text))
+  const view = await createInstance(createContext(), host)
+  await view.handleEvent?.({
+    name: 'board-id',
+    type: 'input',
+    value: '5k8NLHLh',
+  })
+  await view.handleEvent?.({ name: 'board-connect', type: 'submit' })
+  await flush()
+  await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
+  await flush()
+  await flush()
+  expect(JSON.stringify(await view.render())).toContain(
+    'Unable to render the description preview.',
+  )
+  await view.handleEvent?.({ name: 'board-description-retry', type: 'click' })
+  await flush()
+  expect(JSON.stringify(await view.render())).toContain(
+    'BoardDescriptionMarkdown',
+  )
   view.dispose?.()
 })
 
