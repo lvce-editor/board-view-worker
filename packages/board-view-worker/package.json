@@ -1,0 +1,38 @@
+{
+  "name": "@lvce-editor/board-view-worker",
+  "version": "0.0.0-dev",
+  "description": "Independent board view worker for LVCE Editor",
+  "main": "dist/boardWorkerMain.js",
+  "scripts": {
+    "test": "node --unhandled-rejections=warn --experimental-vm-modules ../../node_modules/jest/bin/jest.js --detectOpenHandles --forceExit",
+    "test:watch": "node --unhandled-rejections=warn --experimental-vm-modules ../../node_modules/jest/bin/jest.js --watch"
+  },
+  "author": "Lvce Editor",
+  "license": "MIT",
+  "type": "module",
+  "jest": {
+    "injectGlobals": false,
+    "extensionsToTreatAsEsm": [
+      ".ts"
+    ],
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    },
+    "transform": {
+      "^.+\\.tsx?$": [
+        "ts-jest",
+        {
+          "useESM": true
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "@lvce-editor/api": "9.54.1",
+    "@lvce-editor/virtual-dom-worker": "11.25.2"
+  },
+  "devDependencies": {
+    "jest": "^30.5.2",
+    "ts-jest": "^29.4.15"
+  }
+}
