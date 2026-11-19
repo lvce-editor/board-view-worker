@@ -13,6 +13,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          draft: true
           prerelease: true
           generate_release_notes: true
 
@@ -59,10 +60,12 @@ jobs:
           path: release
       - name: Name release archive
         run: mv release/extension.tar.br board-view-worker-${{ github.ref_name }}.tar.br
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: board-view-worker-${{ github.ref_name }}.tar.br
-          prerelease: true
+      - name: Attach archive to draft prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" "board-view-worker-${TAG}.tar.br"
   publish-npm:
     needs: [build-release, publish-github]
     runs-on: ubuntu-24.04
@@ -90,11 +93,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Promote prerelease after all release jobs pass
+      - name: Publish prerelease after all release jobs pass
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           release_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .id)
           gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-            -F prerelease=false -f make_latest=true
+            -F draft=false -F prerelease=false -f make_latest=true
