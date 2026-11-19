@@ -106,7 +106,8 @@ process.env.PATH_PREFIX ??= '/board-view-worker'
 
 const { commitHash } = await exportStatic({
   extensionPath: 'packages/board-view-worker',
-  testPath: 'packages/e2e',
+  // Browser scenarios run from the Node harness, not the workbench test UI.
+  testPath: '',
   root,
 })
 
