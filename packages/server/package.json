@@ -1,7 +1,6 @@
 {
   "name": "@lvce-editor/board-view-server",
   "version": "0.0.0-dev",
-  "main": "index.js",
   "type": "module",
   "scripts": {
     "dev": "node ../../node_modules/@lvce-editor/server/bin/server.js --only-extension=../board-view-worker --test-path=../e2e"

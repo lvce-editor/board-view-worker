@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreDependencies": ["@lvce-editor/test-with-playwright"],
+  "workspaces": {
+    ".": {
+      "project": ["*.js"]
+    },
+    "packages/board-view-worker": {
+      "entry": ["src/boardWorkerMain.ts", "test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/build": {
+      "project": ["src/**/*.ts"]
+    }
+  }
+}

@@ -9,7 +9,7 @@ import { view, viewId } from '../BoardView/BoardView.ts'
 
 const state = { activationPromise: undefined as Promise<void> | undefined }
 
-export const showBoardLayout = async (): Promise<void> => {
+const showBoardLayout = async (): Promise<void> => {
   await executeCommand('Layout.leaveSideBarFocusMode')
   try {
     const href = await executeCommand('Layout.getHref')

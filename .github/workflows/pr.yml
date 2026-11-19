@@ -27,3 +27,4 @@ jobs:
       - run: npx playwright install chromium --with-deps
       - run: npm run e2e:headless
       - run: npm run check:package
+      - run: npm run knip

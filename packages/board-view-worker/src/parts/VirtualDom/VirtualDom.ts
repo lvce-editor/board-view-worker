@@ -108,27 +108,6 @@ export const button = (
   )
 }
 
-export const iconButton = (
-  name: string,
-  className: string,
-  iconClassName: string,
-  ariaLabel: string,
-  title = ariaLabel,
-): Node => {
-  return node(
-    VirtualDomElements.Button,
-    {
-      ariaLabel,
-      buttonType: 'button',
-      className,
-      name,
-      onClick: 'handleClick',
-      title,
-    },
-    [div(iconClassName, [])],
-  )
-}
-
 export const form = (
   name: string,
   className: string,

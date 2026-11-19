@@ -19,7 +19,7 @@ export interface TrelloCard {
   readonly pos: number
 }
 
-export interface TrelloLabel {
+interface TrelloLabel {
   readonly color: string
   readonly id: string
   readonly name: string
@@ -70,7 +70,7 @@ export class TrelloError extends Error {
   }
 }
 
-export const boardError = (status: number): BoardError => {
+const boardError = (status: number): BoardError => {
   switch (status) {
     case 400:
     case 404:
@@ -307,7 +307,7 @@ const normalizeCard = (value: unknown): TrelloCard | undefined => {
   }
 }
 
-export interface TrelloStatus {
+interface TrelloStatus {
   readonly configured: boolean
   readonly connected: boolean
 }

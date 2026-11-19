@@ -1,6 +1,6 @@
 import type { TrelloBoard } from './Trello.ts'
 
-export interface BoardConnection {
+interface BoardConnection {
   readonly board: TrelloBoard
 }
 

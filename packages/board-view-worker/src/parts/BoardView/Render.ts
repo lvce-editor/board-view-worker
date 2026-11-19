@@ -23,7 +23,7 @@ const descriptionInputClass = mergeClassNames(
 )
 const searchInputClass = mergeClassNames('BoardInput', 'BoardSearchInput')
 
-export interface CardDraft {
+interface CardDraft {
   readonly error?: string | undefined
   readonly listId: string
   readonly saving: boolean
