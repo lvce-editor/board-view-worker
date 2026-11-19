@@ -6,7 +6,11 @@
       "project": ["*.js"]
     },
     "packages/board-view-worker": {
-      "entry": ["src/boardWorkerMain.ts", "test/**/*.test.ts"],
+      "entry": [
+        "src/boardWorkerMain.ts",
+        "src/descriptionMarkdownWorkerMain.ts",
+        "test/**/*.test.ts"
+      ],
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "packages/build": {
