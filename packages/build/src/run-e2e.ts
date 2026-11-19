@@ -9,6 +9,7 @@ import { extname, join, resolve, sep } from 'node:path'
 import { chromium } from 'playwright'
 import { root } from './root.ts'
 import { testBoardSelection } from './test-board-selection.ts'
+import { testBoardRoutes } from './test-board-routes.ts'
 import './build-static.ts'
 
 const directory = resolve(root, 'dist')
@@ -69,35 +70,7 @@ try {
   browser = await chromium.launch({
     headless: process.argv.includes('--headless'),
   })
-  for (const path of ['board', 'boards']) {
-    const context = await browser.newContext()
-    try {
-      const page = await context.newPage()
-      const errors: string[] = []
-      page.on('pageerror', (error) => errors.push(error.message))
-      page.on('console', (message) => {
-        if (message.type() === 'error')
-          console.error('Board console:', message.text())
-      })
-      await page.goto(`${baseUrl}${path}`)
-      try {
-        await page.locator('.BoardProviderGrid').waitFor()
-      } catch (error) {
-        console.error(
-          'Board route state:',
-          page.url(),
-          await page.locator('body').innerText(),
-          errors,
-        )
-        throw error
-      }
-      await page.reload()
-      await page.locator('.BoardProviderGrid').waitFor()
-      assert.deepEqual(errors, [])
-    } finally {
-      await context.close()
-    }
-  }
+  await testBoardRoutes(browser, baseUrl)
   await testBoardSelection(browser, baseUrl)
 } finally {
   await browser?.close()

@@ -28,7 +28,7 @@ import {
 } from './Trello.ts'
 
 export const viewId = 'chat2.views.board'
-export const connectionsPreference = 'chat2.connectedBoardIds'
+const connectionsPreference = 'chat2.connectedBoardIds'
 
 const isCardTitleBlur = (event: Readonly<ViewEvent>): boolean =>
   event.type === 'blur' && event.name === 'board-card-title'

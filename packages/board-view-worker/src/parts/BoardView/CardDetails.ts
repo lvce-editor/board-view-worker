@@ -1,9 +1,9 @@
-export interface CardAttachment {
+interface CardAttachment {
   readonly name: string
   readonly url: string
 }
 
-export interface CardActivity {
+interface CardActivity {
   readonly author: string
   readonly date: string
   readonly text: string
