@@ -506,12 +506,13 @@ const renderDescriptionPreview = (state: BoardState): Dom.Node => {
   const {
     descriptionError,
     descriptionRendering,
+    details,
     detailsError,
     editDesc,
     renderedDescription,
     renderedDescriptionText,
   } = state
-  if (detailsError)
+  if (detailsError && !details)
     return Dom.div('BoardDetailEmpty', [
       Dom.textNode('Description unavailable'),
     ])
@@ -548,7 +549,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
     savingCard,
   } = state
   if (!editingCard) return undefined
-  if (detailsLoading)
+  if (detailsLoading && !details)
     return Dom.node(
       VirtualDomElements.Div,
       { className: 'BoardCardLoading', onKeyDown: 'handleDialogKeyDown' },
@@ -561,6 +562,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
         }),
       ],
     )
+  const editingDisabled = Boolean(detailsError || detailsLoading)
   const status =
     board?.lists.find((list) => list.id === editingCard.idList)?.name ||
     'Unknown list'
@@ -605,7 +607,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                     editName ?? editingCard.name,
                     'BoardDialogTitleButton',
                     {
-                      disabled: Boolean(detailsError),
+                      disabled: editingDisabled,
                     },
                   ),
             ]),
@@ -621,7 +623,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                   Dom.node(VirtualDomElements.Input, {
                     ariaLabel: editDescription ? 'Preview' : 'Edit',
                     className: 'BoardButton',
-                    ...(detailsError && { disabled: true }),
+                    ...(editingDisabled && { disabled: true }),
                     inputType: 'button',
                     name: 'board-description-edit',
                     onClick: 'handleClick',
@@ -664,7 +666,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                   : [
                       Dom.div('BoardDetailEmpty', [
                         Dom.textNode(
-                          detailsError
+                          detailsError && !details
                             ? 'Attachments unavailable'
                             : 'No attachments',
                         ),
@@ -941,6 +943,7 @@ export const render = (state: BoardState): Dom.Node => {
           onDragEnd: 'handleBoardDragEnd',
           onDragStart: 'handleBoardDragStart',
           onKeyDown: 'handleDialogKeyDown',
+          onPointerDown: 'handleCardPointerDown',
         },
         [
           ...(card.coverDataUrl

@@ -8,6 +8,7 @@ import {
   type VirtualDomViewInstance,
 } from '@lvce-editor/api'
 import type { Node } from '../VirtualDom/VirtualDom.ts'
+import type { CardDetails } from './CardDetails.ts'
 import {
   getBoardHash,
   getUrl,
@@ -63,7 +64,23 @@ interface BoardDragHandlers {
   readonly handleBoardDragStart: (name: string) => void
   readonly handleBoardDrop: (name: string) => void
 }
+type LoadPrefetchedCard = (
+  showCached: (details: CardDetails) => void,
+) => Promise<CardDetails | undefined>
+
+interface CardPrefetch {
+  readonly completedAt: number | undefined
+  readonly consume: LoadPrefetchedCard
+  readonly controller: AbortController
+  readonly id: string
+}
+
 interface BoardViewInstance extends VirtualDomViewInstance, BoardDragHandlers {
+  readonly handleCardPointerDown: (
+    name: string,
+    button: number,
+    primary: boolean,
+  ) => void
   readonly handleDialogKeyDown: (key: unknown) => void
   readonly handleDialogOverlayClick: (className: unknown) => void
 }
@@ -202,6 +219,7 @@ export const createInstance = async (
   let cardSave: Promise<boolean> | undefined
   let pendingDescriptionKey: string | undefined
   let moveController: AbortController | undefined
+  let cardPrefetch: CardPrefetch | undefined
   let disposed = false
   const syncFavicon = async (faviconUrl: string): Promise<void> => {
     try {
@@ -301,10 +319,15 @@ export const createInstance = async (
     state = { ...state, draggedCardId: undefined, dropTargetId: undefined }
     await notify()
   }
+  const cancelCardPrefetch = (): void => {
+    cardPrefetch?.controller.abort()
+    cardPrefetch = undefined
+  }
   const cancel = (preserveDraft = false): void => {
     const { cardDraft, detailsLoading } = state
     generation++
     cardSave = undefined
+    cancelCardPrefetch()
     controller?.abort()
     detailsController?.abort()
     faviconController?.abort()
@@ -1055,44 +1078,121 @@ export const createInstance = async (
         break
     }
   }
-  const loadCardDetails = async (): Promise<void> => {
-    const { editingCard, savingCard } = state
-    if (!editingCard || savingCard) return
-    detailsController?.abort()
-    detailsController = new AbortController()
-    const { signal } = detailsController
-    descriptionGeneration++
-    pendingDescriptionKey = undefined
-    state = { ...state, detailsError: undefined, detailsLoading: true }
-    try {
-      const details = await host.loadCard(editingCard.id, signal)
-      if (disposed || signal.aborted) return
-      const preview = await prepareDescription(details.desc, signal)
-      if (disposed || signal.aborted) return
-      state = {
-        ...state,
+  const prefetchCard = (name: string): void => {
+    const { board, editingCard, loading } = state
+    if (disposed || editingCard || loading || !name.startsWith('board-card:'))
+      return
+    const id = name.slice('board-card:'.length)
+    if (!board?.cards.some((card) => card.id === id)) return
+    cancelCardPrefetch()
+    const requestController = new AbortController()
+    let cached: CardDetails | undefined
+    let completedAt: number | undefined
+    let showCached: ((details: CardDetails) => void) | undefined
+    const load = async (): Promise<CardDetails | undefined> => {
+      try {
+        return await host.loadCard(id, requestController.signal, (details) => {
+          cached = details
+          showCached?.(details)
+        })
+      } catch {
+        return undefined
+      } finally {
+        completedAt = performance.now()
+      }
+    }
+    const result = load()
+    cardPrefetch = {
+      get completedAt(): number | undefined {
+        return completedAt
+      },
+      consume(show): Promise<CardDetails | undefined> {
+        showCached = show
+        if (cached) show(cached)
+        return result
+      },
+      controller: requestController,
+      id,
+    }
+  }
+  const showDetails = (
+    details: CardDetails,
+    loading: boolean,
+    preview?: Awaited<ReturnType<typeof prepareDescription>>,
+  ): void => {
+    const { details: previousDetails, editDesc } = state
+    const firstDetails = !previousDetails
+    const descriptionChanged = firstDetails || editDesc !== details.desc
+    if (descriptionChanged) {
+      descriptionGeneration++
+      pendingDescriptionKey = undefined
+    }
+    state = {
+      ...state,
+      details,
+      detailsLoading: loading,
+      editDesc: details.desc,
+      ...(descriptionChanged && {
         descriptionError: undefined,
         descriptionRendering: false,
-        details,
-        detailsLoading: false,
-        editDesc: details.desc,
-        editDescription: false,
         renderedDescription: undefined,
         renderedDescriptionText: undefined,
         ...preview,
-      }
+      }),
+    }
+    if (firstDetails) focusEditor = !focusEditor
+    if (descriptionChanged && !preview && details.desc) {
+      void renderDescription(details.desc)
+    } else {
+      void notify()
+    }
+  }
+  const loadCardDetails = async (
+    loadPrefetched?: LoadPrefetchedCard,
+  ): Promise<void> => {
+    const { detailsLoading, editingCard, savingCard } = state
+    if (!editingCard || savingCard || detailsLoading) return
+    // A retry can keep rendering the cached description while it refreshes.
+    if (!detailsController || detailsController.signal.aborted) {
+      detailsController = new AbortController()
+    }
+    const { signal } = detailsController
+    const isCurrent = (): boolean => !disposed && !signal.aborted
+    state = { ...state, detailsError: undefined, detailsLoading: true }
+    const showCached = (details: CardDetails): void => {
+      const { details: previousDetails } = state
+      if (isCurrent() && !previousDetails) showDetails(details, true)
+    }
+    try {
+      const details = await (loadPrefetched
+        ? loadPrefetched(showCached)
+        : host.loadCard(editingCard.id, signal, showCached))
+      if (!isCurrent()) return
+      if (!details) throw new Error('Card details request failed')
+      // Keep the existing staged opening on a cold load.
+      const { details: previousDetails } = state
+      const preview = previousDetails
+        ? undefined
+        : await prepareDescription(details.desc, signal)
+      if (isCurrent()) showDetails(details, false, preview)
     } catch {
-      if (disposed || signal.aborted) return
+      if (!isCurrent()) return
+      const { details } = state
+      if (!details) focusEditor = !focusEditor
       state = {
         ...state,
-        detailsError: 'Unable to load card details. Try again.',
+        detailsError: details
+          ? 'Unable to refresh card details. Try again.'
+          : 'Unable to load card details. Try again.',
         detailsLoading: false,
       }
+      await notify()
     }
-    focusEditor = !focusEditor
-    await notify()
   }
-  const showCard = (card: TrelloCard): void => {
+  const showCard = (
+    card: TrelloCard,
+    loadPrefetched?: LoadPrefetchedCard,
+  ): void => {
     state = {
       ...state,
       descriptionError: undefined,
@@ -1109,14 +1209,23 @@ export const createInstance = async (
       renderedDescriptionText: undefined,
       savingCard: false,
     }
-    void loadCardDetails()
+    void loadCardDetails(loadPrefetched)
   }
   const openCard = (id: string): void => {
     const { board, savingCard } = state
     const card = board?.cards.find((item) => item.id === id)
     if (!card || savingCard) return
+    // Reuse an in-flight press or a result that completed during the gesture.
+    const prefetch =
+      cardPrefetch?.id === id &&
+      (cardPrefetch.completedAt === undefined ||
+        performance.now() - cardPrefetch.completedAt < 1000)
+        ? cardPrefetch
+        : undefined
+    if (prefetch) cardPrefetch = undefined
     cancel()
-    showCard(card)
+    detailsController = prefetch?.controller
+    showCard(card, prefetch?.consume)
     void syncBoardHash()
   }
   const changeBoard = async (name: string | undefined): Promise<void> => {
@@ -1382,11 +1491,19 @@ export const createInstance = async (
         !board?.cards.some((card) => card.id === cardId)
       )
         return
+      cancelCardPrefetch()
       state = { ...state, draggedCardId: cardId, dropTargetId: undefined }
       void notify()
     },
     handleBoardDrop(name: string): void {
       void moveCard(name)
+    },
+    handleCardPointerDown(
+      name: string,
+      button: number,
+      primary: boolean,
+    ): void {
+      if (button === 0 && primary) prefetchCard(name)
     },
     handleDialogKeyDown(key: unknown): void {
       const { editingCard, editingTitle, optionsOpen } = state
@@ -1472,6 +1589,15 @@ export const view: View<VirtualDomViewInstance> = {
   create: createInstance,
   displayName: 'Boards',
   eventListeners: [
+    {
+      name: 'handleCardPointerDown',
+      params: [
+        'handleCardPointerDown',
+        'event.currentTarget.name',
+        'event.button',
+        'event.isPrimary',
+      ],
+    },
     {
       name: 'handleBoardDragStart',
       params: ['handleBoardDragStart', 'event.currentTarget.name'],
