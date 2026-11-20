@@ -43,6 +43,7 @@ export interface BoardState {
   readonly details?: CardDetails | undefined
   readonly detailsError?: string | undefined
   readonly detailsLoading?: boolean
+  readonly discoveringBoards?: boolean
   readonly draggedCardId?: string | undefined
   readonly dropTargetId?: string | undefined
   readonly editDesc?: string
@@ -210,7 +211,6 @@ const renderBoardTile = (
               Dom.node(VirtualDomElements.Img, {
                 alt: '',
                 className: 'BoardTileImage',
-                loading: 'lazy',
                 src: board.backgroundImage,
               }),
             ]
@@ -304,8 +304,7 @@ const renderBoardSearch = (state: BoardState): Dom.Node => {
 }
 
 const connectionHelp = (state: BoardState): string => {
-  const { boards, error, loading } = state
-  if (loading) return 'Loading your Trello boards…'
+  const { boards, error } = state
   if (boards.length === 0 && !error)
     return 'No open boards found. Create a board in Trello, then refresh this list.'
   return 'Trello is connected. Choose a board to open it.'
@@ -850,10 +849,29 @@ const renderCardLabels = (
   ]
 }
 
+const renderStatus = (state: BoardState): readonly Dom.Node[] => {
+  const { authorizing, discoveringBoards, loading } = state
+  if (!loading && !authorizing) return []
+  const loadingMessage = discoveringBoards
+    ? 'Loading your Trello boards…'
+    : 'Loading…'
+  return [
+    Dom.node(
+      VirtualDomElements.Div,
+      { className: 'BoardStatus', role: 'status' },
+      [
+        Dom.textNode(
+          authorizing ? 'Waiting for Trello authorization…' : loadingMessage,
+        ),
+      ],
+    ),
+  ]
+}
+
 export const render = (state: BoardState): Dom.Node => {
   const {
-    authorizing,
     board,
+    discoveringBoards,
     draggedCardId,
     dropTargetId,
     editingCard,
@@ -900,6 +918,8 @@ export const render = (state: BoardState): Dom.Node => {
   }
   const cardDialog = renderCardDialog(state)
   const errorNode = renderError(state)
+  const setup =
+    board || (discoveringBoards && loading) ? [] : [renderSetup(state)]
   return Dom.node(
     VirtualDomElements.Div,
     {
@@ -920,22 +940,8 @@ export const render = (state: BoardState): Dom.Node => {
                 ]
               : []),
           ]
-        : [renderSetup(state)]),
-      ...(loading || authorizing
-        ? [
-            Dom.node(
-              VirtualDomElements.Div,
-              { className: 'BoardStatus', role: 'status' },
-              [
-                Dom.textNode(
-                  authorizing
-                    ? 'Waiting for Trello authorization…'
-                    : 'Loading…',
-                ),
-              ],
-            ),
-          ]
-        : []),
+        : setup),
+      ...renderStatus(state),
       ...(cardDialog ? [cardDialog] : []),
     ],
   )

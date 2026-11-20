@@ -16,6 +16,7 @@ import {
 } from './CardCache.ts'
 import { normalizeDetails, type CardDetails } from './CardDetails.ts'
 import { loadDescriptionImages } from './DescriptionImages.ts'
+import { loadBackgroundImage } from './LoadBackgroundImage.ts'
 
 export interface TrelloCard {
   readonly attachmentCount?: number
@@ -79,6 +80,15 @@ export class TrelloError extends Error {
     super(details.message)
   }
 }
+
+export const isBoardPickerAccessError = (error: unknown): boolean =>
+  error instanceof TrelloError &&
+  [
+    'TRELLO_ACCESS_DENIED',
+    'TRELLO_CONNECTION_REQUIRED',
+    'TRELLO_LOGIN_REQUIRED',
+    'TRELLO_NOT_CONFIGURED',
+  ].includes(error.details.code)
 
 const boardError = (status: number): BoardError => {
   switch (status) {
@@ -173,6 +183,7 @@ const safeBackgroundGradient = (value: unknown): string | undefined =>
     : undefined
 const normalizeBoardBackground = (
   value: unknown,
+  tile = false,
 ): Pick<
   TrelloBoardSummary,
   'backgroundColor' | 'backgroundGradient' | 'backgroundImage'
@@ -193,10 +204,19 @@ const normalizeBoardBackground = (
   const scaledBackgrounds = Array.isArray(prefs?.backgroundImageScaled)
     ? prefs.backgroundImageScaled
     : []
-  const largestBackground = scaledBackgrounds.at(-1)
+  const scaledBackground = tile
+    ? (scaledBackgrounds.find(
+        (item) =>
+          isRecord(item) && typeof item.width === 'number' && item.width >= 240,
+      ) ?? scaledBackgrounds.at(-1))
+    : scaledBackgrounds.at(-1)
+  const scaledImage = isRecord(scaledBackground)
+    ? scaledBackground.url
+    : undefined
   const backgroundImage = safeBackgroundImage(
-    prefs?.backgroundImage ??
-      (isRecord(largestBackground) ? largestBackground.url : undefined),
+    tile
+      ? (scaledImage ?? prefs?.backgroundImage)
+      : (prefs?.backgroundImage ?? scaledImage),
   )
   return {
     ...(backgroundColor && { backgroundColor }),
@@ -215,7 +235,7 @@ const normalizeBoardSummary = (
   )
     return undefined
   return {
-    ...normalizeBoardBackground(value),
+    ...normalizeBoardBackground(value, true),
     id:
       typeof value.shortLink === 'string' &&
       boardIdPattern.test(value.shortLink)
@@ -322,11 +342,63 @@ interface TrelloStatus {
   readonly connected: boolean
 }
 
+const boardPickerCache = 'builtin.board-view.picker-v1'
+const pickerCredentialHeader = 'X-Board-Picker-Credential'
+const pickerImagePattern =
+  /^data:image\/(?:png|jpeg|webp|avif|gif);base64,[A-Za-z0-9+/]+=*$/u
+
+const normalizeCachedBoard = (
+  value: unknown,
+): TrelloBoardSummary | undefined => {
+  const board = normalizeBoardSummary(value)
+  if (!board || !isRecord(value)) return undefined
+  const backgroundColor = safeBackgroundColor(value.backgroundColor)
+  const backgroundGradient = safeBackgroundGradient(value.backgroundGradient)
+  const backgroundImage =
+    typeof value.backgroundImage === 'string' &&
+    pickerImagePattern.test(value.backgroundImage)
+      ? value.backgroundImage
+      : undefined
+  return {
+    id: board.id,
+    name: board.name,
+    ...(backgroundColor && { backgroundColor }),
+    ...(backgroundGradient && { backgroundGradient }),
+    ...(backgroundImage && { backgroundImage }),
+  }
+}
+
+const pickerCacheEntry = async (
+  config: Readonly<BackendConfiguration>,
+): Promise<
+  | {
+      readonly cache: Cache
+      readonly credential: string
+      readonly key: string
+    }
+  | undefined
+> => {
+  if (!config.baseUrl || !config.accessToken || !globalThis.caches)
+    return undefined
+  const baseUrl = URL.parse(config.baseUrl)
+  if (!baseUrl || !['https:', 'http:'].includes(baseUrl.protocol))
+    return undefined
+  // Keep one snapshot per backend. A different LVCE session cannot read it.
+  const key = new URL('/api/integrations/trello/board-picker-cache', baseUrl)
+    .href
+  const credential = await cacheRequestUrl(key, config.accessToken)
+  const cache = await openCardCache(boardPickerCache)
+  return cache && credential ? { cache, credential, key } : undefined
+}
+
 export interface TrelloClient {
   readonly authorize: (signal: Readonly<AbortSignal>) => Promise<string>
   readonly boards: (
     signal: Readonly<AbortSignal>,
   ) => Promise<readonly TrelloBoardSummary[]>
+  readonly cachedBoards: (
+    signal: Readonly<AbortSignal>,
+  ) => Promise<readonly TrelloBoardSummary[] | undefined>
   readonly createCard: (
     idList: string,
     name: string,
@@ -374,6 +446,35 @@ export const createTrelloClient = (
   request: typeof fetch = fetch,
 ): TrelloClient => {
   let cacheRevision = 0
+  let pickerRevision = 0
+  const clearPickerCache = async (): Promise<void> => {
+    pickerRevision++
+    try {
+      await globalThis.caches?.delete(boardPickerCache)
+    } catch {
+      // Cache Storage is best-effort.
+    }
+  }
+  const cachedBoards = async (
+    signal: Readonly<AbortSignal>,
+  ): Promise<readonly TrelloBoardSummary[] | undefined> => {
+    const revision = pickerRevision
+    try {
+      const entry = await pickerCacheEntry(await configuration())
+      if (!entry || revision !== pickerRevision || signal.aborted)
+        return undefined
+      const response = await readCardCache(entry.cache, entry.key)
+      if (response?.headers.get(pickerCredentialHeader) !== entry.credential)
+        return undefined
+      const data: unknown = await response.json()
+      if (!Array.isArray(data) || signal.aborted || revision !== pickerRevision)
+        return undefined
+      const boards = data.map(normalizeCachedBoard)
+      return boards.every((board) => board !== undefined) ? boards : undefined
+    } catch {
+      return undefined
+    }
+  }
   const invalidateCard = async (id: string): Promise<void> => {
     cacheRevision++
     try {
@@ -391,8 +492,9 @@ export const createTrelloClient = (
     method = 'GET',
     body?: unknown,
     mapError: (status: number) => BoardError = boardError,
+    configOverride?: Readonly<BackendConfiguration>,
   ): Promise<{ data: unknown; baseUrl: string }> => {
-    const config = await configuration()
+    const config = configOverride ?? (await configuration())
     if (!config.baseUrl || !config.accessToken)
       throw new TrelloError({
         code: 'TRELLO_LOGIN_REQUIRED',
@@ -439,19 +541,44 @@ export const createTrelloClient = (
   const status = async (
     signal: Readonly<AbortSignal>,
   ): Promise<TrelloStatus> => {
-    const { data } = await call('status', signal)
-    if (
-      !isRecord(data) ||
-      typeof data.configured !== 'boolean' ||
-      typeof data.connected !== 'boolean'
-    )
-      throw new TrelloError(boardError(0))
-    return { configured: data.configured, connected: data.connected }
+    const revision = pickerRevision
+    try {
+      const { data } = await call('status', signal)
+      if (
+        !isRecord(data) ||
+        typeof data.configured !== 'boolean' ||
+        typeof data.connected !== 'boolean'
+      )
+        throw new TrelloError(boardError(0))
+      if (
+        (!data.configured || !data.connected) &&
+        !signal.aborted &&
+        revision === pickerRevision
+      )
+        await clearPickerCache()
+      return { configured: data.configured, connected: data.connected }
+    } catch (error) {
+      if (
+        isBoardPickerAccessError(error) &&
+        !signal.aborted &&
+        revision === pickerRevision
+      )
+        await clearPickerCache()
+      throw error
+    }
   }
   const getTrelloAccessToken = async (
     signal: Readonly<AbortSignal>,
+    config?: Readonly<BackendConfiguration>,
   ): Promise<string> => {
-    const { data } = await call('token', signal)
+    const { data } = await call(
+      'token',
+      signal,
+      'GET',
+      undefined,
+      boardError,
+      config,
+    )
     if (!isRecord(data) || typeof data.accessToken !== 'string')
       throw new TrelloError(boardError(0))
     return data.accessToken
@@ -494,6 +621,7 @@ export const createTrelloClient = (
       await Promise.all([
         globalThis.caches?.delete(cardDetailsCache),
         globalThis.caches?.delete(cardImagesCache),
+        clearPickerCache(),
       ])
     } catch {
       // Entries are also scoped by the Trello credential.
@@ -678,13 +806,17 @@ export const createTrelloClient = (
   const boards = async (
     signal: Readonly<AbortSignal>,
   ): Promise<readonly TrelloBoardSummary[]> => {
+    const revision = ++pickerRevision
     try {
+      const config = await configuration()
+      const token = await getTrelloAccessToken(signal, config)
       const data = await trelloRequest(
         `members/me/boards?${new URLSearchParams({
           fields: 'id,name,prefs,shortLink',
           filter: 'open',
         })}`,
         signal,
+        token,
       )
       if (
         !Array.isArray(data) ||
@@ -695,15 +827,40 @@ export const createTrelloClient = (
           message:
             'Trello returned an unreadable board list. Try again shortly.',
         })
-      return data
+      const summaries = data
         .map(normalizeBoardSummary)
         .filter((board): board is TrelloBoardSummary => Boolean(board))
         .toSorted(
           (a: Readonly<TrelloBoardSummary>, b: Readonly<TrelloBoardSummary>) =>
             a.name.localeCompare(b.name),
         )
+      const prepared = await Promise.all(
+        summaries.map(async ({ backgroundImage, ...board }) => {
+          const image = backgroundImage
+            ? await loadBackgroundImage(backgroundImage, signal, request)
+            : undefined
+          return { ...board, ...(image && { backgroundImage: image }) }
+        }),
+      )
+      signal.throwIfAborted()
+      const entry = await pickerCacheEntry(config)
+      if (entry && !signal.aborted && revision === pickerRevision) {
+        await writeCardCache(
+          entry.cache,
+          entry.key,
+          Response.json(prepared, {
+            headers: { [pickerCredentialHeader]: entry.credential },
+          }),
+        )
+      }
+      return prepared
     } catch (error) {
-      if (signal.aborted || error instanceof TrelloError) throw error
+      if (signal.aborted) throw error
+      if (error instanceof TrelloError) {
+        if (revision === pickerRevision && isBoardPickerAccessError(error))
+          await clearPickerCache()
+        throw error
+      }
       throw new TrelloError({
         code: 'TRELLO_REQUEST_FAILED',
         message:
@@ -843,6 +1000,7 @@ export const createTrelloClient = (
   return {
     authorize,
     boards,
+    cachedBoards,
     createCard,
     disconnect,
     load,
