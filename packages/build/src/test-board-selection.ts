@@ -20,6 +20,16 @@ export const testBoardSelection = async (
   const releaseRevalidation = Promise.withResolvers<void>()
   let holdRevalidation = false
   const releaseImage = Promise.withResolvers<void>()
+  const releaseComment = Promise.withResolvers<void>()
+  const commentRequests: string[] = []
+  let postedComment:
+    | {
+        data: { text: string }
+        date: string
+        memberCreator: { fullName: string }
+        type: string
+      }
+    | undefined
   let detailLoads = 0
   let imageLoads = 0
   let empty = false
@@ -171,7 +181,7 @@ export const testBoardSelection = async (
       await route.fulfill({
         headers: {
           'Access-Control-Allow-Headers': 'authorization',
-          'Access-Control-Allow-Methods': 'GET',
+          'Access-Control-Allow-Methods': 'GET, POST',
           'Access-Control-Allow-Origin': '*',
         },
         status: 204,
@@ -243,6 +253,26 @@ export const testBoardSelection = async (
       })
       return
     }
+    if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/actions/comments') {
+      assert.equal(request.method(), 'POST')
+      const text = url.searchParams.get('text')
+      assert.ok(text)
+      commentRequests.push(text)
+      const headers = { 'Access-Control-Allow-Origin': '*' }
+      if (commentRequests.length === 1) {
+        await route.fulfill({ headers, json: {}, status: 503 })
+        return
+      }
+      await releaseComment.promise
+      postedComment = {
+        data: { text },
+        date: new Date().toISOString(),
+        memberCreator: { fullName: 'Comment author' },
+        type: 'commentCard',
+      }
+      await route.fulfill({ headers, json: postedComment })
+      return
+    }
     if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa') {
       const load = ++detailLoads
       if (load === 2) {
@@ -254,6 +284,7 @@ export const testBoardSelection = async (
         headers: { 'Access-Control-Allow-Origin': '*' },
         json: {
           actions: [
+            ...(postedComment ? [postedComment] : []),
             {
               data: {
                 text:
@@ -792,8 +823,59 @@ export const testBoardSelection = async (
     assert.equal(await cachedTitle.isEnabled(), true)
     assert.equal(await descriptionEdit.isEnabled(), true)
     assert.equal(imageLoads, 1, 'Revalidation reuses the cached Trello image')
+
+    const commentInput = dialog.getByRole('textbox', {
+      name: 'Write a comment',
+    })
+    const postComment = dialog.getByRole('button', { name: 'Post comment' })
+    assert.equal(await postComment.isDisabled(), true)
+    await commentInput.fill('   ')
+    assert.equal(await postComment.isDisabled(), true)
+    const commentText = 'Looks good & ready.\nThanks!'
+    await commentInput.fill(`  ${commentText}  `)
+    await postComment.click()
+    await dialog
+      .getByRole('alert')
+      .filter({ hasText: 'Trello is temporarily unavailable' })
+      .waitFor()
+    assert.equal(await commentInput.inputValue(), `  ${commentText}  `)
+    await postComment.click()
+    assert.equal(
+      await dialog.getByRole('button', { name: 'Posting…' }).isDisabled(),
+      true,
+    )
+    assert.equal(
+      await dialog.getByText('Comment author', { exact: true }).count(),
+      0,
+    )
+    releaseComment.resolve()
+    await dialog.getByText('Comment author', { exact: true }).waitFor()
+    assert.equal(
+      await dialog.locator('.BoardActivityText').first().textContent(),
+      commentText,
+    )
+    assert.equal(await commentInput.inputValue(), '')
+    assert.deepEqual(commentRequests, [commentText, commentText])
+    await page.waitForFunction(
+      () =>
+        globalThis.document.activeElement?.getAttribute('name') ===
+        'board-comment-text',
+    )
+
     await page.keyboard.press('Escape')
     await dialog.waitFor({ state: 'detached' })
+    await badges.getByRole('img', { exact: true, name: '4 comments' }).waitFor()
+    await cardButton.click()
+    await dialog.getByText('Comment author', { exact: true }).waitFor()
+    assert.equal(
+      await dialog.locator('.BoardActivityText').first().textContent(),
+      commentText,
+    )
+    await dialog.getByRole('button', { name: 'Close card' }).click()
+    await dialog.waitFor({ state: 'detached' })
+    process.stdout.write(
+      'Card comments: validation, failed write, retry, activity, badge and reopen: pass\n',
+    )
     const draggedCard = page.locator(
       'button[name="board-card:aaaaaaaaaaaaaaaaaaaaaaaa"]',
     )

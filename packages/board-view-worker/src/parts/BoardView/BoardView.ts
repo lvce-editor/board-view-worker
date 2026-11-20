@@ -38,6 +38,7 @@ const isCardTitleBlur = (event: Readonly<ViewEvent>): boolean =>
   event.type === 'blur' && event.name === 'board-card-title'
 
 export interface BoardHost {
+  readonly addComment: typeof trelloClient.addComment
   readonly authorize: typeof trelloClient.authorize
   readonly boards: typeof trelloClient.boards
   readonly cachedBoards: typeof trelloClient.cachedBoards
@@ -108,6 +109,7 @@ const isReauthorizationRequired = (error: unknown): boolean =>
   error instanceof TrelloError &&
   error.details.code === 'TRELLO_REAUTHORIZE_REQUIRED'
 const defaultHost: BoardHost = {
+  addComment: trelloClient.addComment,
   authorize: trelloClient.authorize,
   boards: trelloClient.boards,
   cachedBoards: trelloClient.cachedBoards,
@@ -241,6 +243,7 @@ export const createInstance = async (
   const { board: initialBoard } = state
   await syncTab(initialBoard?.name || 'Boards', initialBoard?.faviconUrl)
   let focusEditor = false
+  let focusComment = false
   let focusCardTitle = false
   let focusDescription = false
   let focusNewCard = false
@@ -343,6 +346,7 @@ export const createInstance = async (
         editingCard: undefined,
       }),
       loading: false,
+      postingComment: false,
       savingCard: false,
     }
   }
@@ -574,8 +578,10 @@ export const createInstance = async (
       editDesc = '',
       editingCard,
       editName,
+      postingComment,
     } = state
     if (!editingCard || detailsError || detailsLoading) return true
+    if (postingComment) return false
     const name = editName?.trim() || editingCard.name
     if (
       name === editingCard.name &&
@@ -602,11 +608,18 @@ export const createInstance = async (
     void notify()
   }
   const dismissEditor = async (): Promise<void> => {
-    const { editError } = state
+    const { editError, postingComment: alreadyPosting } = state
+    if (alreadyPosting) return
     const requestGeneration = generation
     const canClose = Boolean(editError) || (await saveCard())
-    const { editingCard } = state
-    if (!canClose || requestGeneration !== generation || !editingCard) return
+    const { editingCard, postingComment } = state
+    if (
+      !canClose ||
+      requestGeneration !== generation ||
+      !editingCard ||
+      postingComment
+    )
+      return
     closeEditor()
     cancel()
     void notify()
@@ -1045,11 +1058,15 @@ export const createInstance = async (
     void notify()
   }
   const handleInput = (name: string | undefined, value: string): void => {
-    const { cardDraft } = state
+    const { cardDraft, editingCard, postingComment } = state
     switch (name) {
       case 'board-card-title':
         if (cardDraft && !cardDraft.saving)
           state = { ...state, cardDraft: { ...cardDraft, title: value } }
+        break
+      case 'board-comment-text':
+        if (editingCard && !postingComment)
+          state = { ...state, commentDraft: value, commentError: undefined }
         break
       case 'board-id':
         cancel()
@@ -1147,11 +1164,73 @@ export const createInstance = async (
       void notify()
     }
   }
+  const postComment = async (): Promise<void> => {
+    const {
+      board,
+      boardId,
+      commentDraft,
+      details,
+      detailsError,
+      detailsLoading,
+      editingCard,
+      postingComment,
+      savingCard,
+    } = state
+    const text = commentDraft?.trim()
+    const signal = detailsController?.signal
+    if (
+      !text ||
+      !board ||
+      !editingCard ||
+      !details ||
+      !signal ||
+      detailsError ||
+      detailsLoading ||
+      postingComment ||
+      savingCard
+    )
+      return
+
+    state = { ...state, commentError: undefined, postingComment: true }
+    void notify()
+    try {
+      const activity = await host.addComment(editingCard.id, text, signal)
+      if (disposed || signal.aborted) return
+      const commentCount = (editingCard.commentCount ?? 0) + 1
+      const updatedBoard = {
+        ...board,
+        cards: board.cards.map((card) =>
+          card.id === editingCard.id ? { ...card, commentCount } : card,
+        ),
+      }
+      host.session.set(boardId, { board: updatedBoard })
+      state = {
+        ...state,
+        board: updatedBoard,
+        commentDraft: '',
+        details: { ...details, activities: [activity, ...details.activities] },
+        editingCard: { ...editingCard, commentCount },
+        postingComment: false,
+      }
+    } catch (error) {
+      if (disposed || signal.aborted) return
+      state = {
+        ...state,
+        commentError:
+          error instanceof TrelloError
+            ? error.details.message
+            : 'Unable to confirm the comment. Check the activity before retrying.',
+        postingComment: false,
+      }
+    }
+    focusComment = !focusComment
+    void notify()
+  }
   const loadCardDetails = async (
     loadPrefetched?: LoadPrefetchedCard,
   ): Promise<void> => {
-    const { detailsLoading, editingCard, savingCard } = state
-    if (!editingCard || savingCard || detailsLoading) return
+    const { detailsLoading, editingCard, postingComment, savingCard } = state
+    if (!editingCard || savingCard || detailsLoading || postingComment) return
     // A retry can keep rendering the cached description while it refreshes.
     if (!detailsController || detailsController.signal.aborted) {
       detailsController = new AbortController()
@@ -1195,6 +1274,8 @@ export const createInstance = async (
   ): void => {
     state = {
       ...state,
+      commentDraft: undefined,
+      commentError: undefined,
       descriptionError: undefined,
       descriptionRendering: false,
       details: undefined,
@@ -1395,6 +1476,10 @@ export const createInstance = async (
       handleInput(event.name, event.value)
       return true
     }
+    if (event.type === 'submit' && event.name === 'board-post-comment') {
+      void postComment()
+      return true
+    }
     if (event.type === 'submit' && event.name === 'board-create-card') {
       void createCard()
       return true
@@ -1454,6 +1539,7 @@ export const createInstance = async (
     },
     getContext: () => ({
       focusCardTitle,
+      focusComment,
       focusDescription,
       focusEditor,
       focusNewCard,
@@ -1551,6 +1637,8 @@ export const createInstance = async (
         oldContext.focusDescription !== newContext.focusDescription
       )
         return '[name="edit-card-desc"]'
+      if (editingCard && oldContext.focusComment !== newContext.focusComment)
+        return '[name="board-comment-text"]'
       if (oldContext.focusEditor !== newContext.focusEditor && editingCard)
         return '[role="dialog"]'
       if (oldContext.focusNewCard !== newContext.focusNewCard && cardDraft)

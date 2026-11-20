@@ -14,7 +14,12 @@ import {
   readCardCache,
   writeCardCache,
 } from './CardCache.ts'
-import { normalizeDetails, type CardDetails } from './CardDetails.ts'
+import {
+  normalizeActivity,
+  normalizeDetails,
+  type CardActivity,
+  type CardDetails,
+} from './CardDetails.ts'
 import { loadDescriptionImages } from './DescriptionImages.ts'
 import { loadBackgroundImage } from './LoadBackgroundImage.ts'
 
@@ -392,6 +397,11 @@ const pickerCacheEntry = async (
 }
 
 export interface TrelloClient {
+  readonly addComment: (
+    id: string,
+    text: string,
+    signal: Readonly<AbortSignal>,
+  ) => Promise<CardActivity>
   readonly authorize: (signal: Readonly<AbortSignal>) => Promise<string>
   readonly boards: (
     signal: Readonly<AbortSignal>,
@@ -588,18 +598,28 @@ export const createTrelloClient = (
     path: string,
     signal: Readonly<AbortSignal>,
     accessToken?: string,
-    cache?: RequestCache,
+    {
+      cache,
+      mapError = boardError,
+      method,
+    }: Readonly<{
+      cache?: RequestCache
+      method?: 'GET' | 'POST'
+      mapError?: (status: number) => BoardError
+    }> = {},
   ): Promise<unknown> => {
     const token = accessToken ?? (await getTrelloAccessToken(signal))
+    signal.throwIfAborted()
     const url = new URL(`/1/${path}`, 'https://api.trello.com')
     const response = await request(url.href, {
       ...(cache && { cache }),
       credentials: 'omit',
       headers: { Authorization: `Bearer ${token}` },
+      ...(method && { method }),
       redirect: 'error',
       signal: AbortSignal.any([signal, AbortSignal.timeout(45_000)]),
     })
-    if (!response.ok) throw new TrelloError(boardError(response.status))
+    if (!response.ok) throw new TrelloError(mapError(response.status))
     return response.json() as Promise<unknown>
   }
   const authorize = async (signal: Readonly<AbortSignal>): Promise<string> => {
@@ -735,7 +755,7 @@ export const createTrelloClient = (
         if (!signal.aborted && revision === cacheRevision) onCached(details)
       }
       const [result] = await Promise.allSettled([
-        trelloRequest(path, signal, token, 'no-store'),
+        trelloRequest(path, signal, token, { cache: 'no-store' }),
         readCachedDetails(),
       ])
       signal.throwIfAborted()
@@ -754,6 +774,51 @@ export const createTrelloClient = (
         message: 'Unable to load card details. Try again.',
       })
     }
+  }
+  const addComment = async (
+    id: string,
+    text: string,
+    signal: Readonly<AbortSignal>,
+  ): Promise<CardActivity> => {
+    if (!cardIdPattern.test(id)) {
+      throw new TrelloError({
+        code: 'TRELLO_INVALID_CARD',
+        message: 'This card could not be identified. Refresh the board.',
+      })
+    }
+    const data = await trelloRequest(
+      `cards/${id}/actions/comments?${new URLSearchParams({ text })}`,
+      signal,
+      undefined,
+      {
+        mapError: (status) => {
+          if (status === 400 || status === 414) {
+            return {
+              code: 'TRELLO_INVALID_COMMENT',
+              message:
+                'Trello rejected this comment. Check its length and try again.',
+            }
+          }
+          if (status === 404) {
+            return {
+              code: 'TRELLO_CARD_NOT_FOUND',
+              message: 'This card could not be found. Refresh the board.',
+            }
+          }
+          return boardError(status)
+        },
+        method: 'POST',
+      },
+    )
+    await invalidateCard(id)
+    const activity = normalizeActivity(data)
+    if (isRecord(data) && data.type === 'commentCard' && activity)
+      return activity
+    throw new TrelloError({
+      code: 'TRELLO_INVALID_RESPONSE',
+      message:
+        'Trello accepted the comment. Reopen the card to check the activity before retrying.',
+    })
   }
   const loadCovers = async (
     input: string,
@@ -1010,6 +1075,7 @@ export const createTrelloClient = (
     await invalidateCard(cardId)
   }
   return {
+    addComment,
     authorize,
     boards,
     cachedBoards,

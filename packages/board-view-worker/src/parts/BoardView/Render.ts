@@ -21,6 +21,7 @@ const descriptionInputClass = mergeClassNames(
   'BoardDescriptionInput',
 )
 const titleInputClass = mergeClassNames('BoardInput', 'BoardDialogTitleInput')
+const commentInputClass = mergeClassNames('BoardInput', 'BoardCommentInput')
 const searchInputClass = mergeClassNames('BoardInput', 'BoardSearchInput')
 
 interface CardDraft {
@@ -38,6 +39,8 @@ export interface BoardState {
   readonly boardId: string
   readonly boards: readonly TrelloBoardSummary[]
   readonly cardDraft?: CardDraft | undefined
+  readonly commentDraft?: string | undefined
+  readonly commentError?: string | undefined
   readonly connectedIds: readonly string[]
   readonly descriptionError?: string | undefined
   readonly descriptionRendering?: boolean
@@ -56,6 +59,7 @@ export interface BoardState {
   readonly error: BoardError | undefined
   readonly loading: boolean
   readonly optionsOpen?: boolean
+  readonly postingComment?: boolean
   readonly providerSelected: boolean
   readonly renderedDescription?: Dom.Node | undefined
   readonly renderedDescriptionText?: string | undefined
@@ -455,6 +459,52 @@ const renderActivityDate = (value: string, now: number): Dom.Node => {
   )
 }
 
+const renderCommentComposer = (state: BoardState): Dom.Node => {
+  const {
+    commentDraft = '',
+    commentError,
+    detailsError,
+    detailsLoading,
+    postingComment,
+    savingCard,
+  } = state
+  return Dom.form('board-post-comment', 'BoardCommentComposer', [
+    Dom.node(VirtualDomElements.TextArea, {
+      ariaLabel: 'Write a comment',
+      className: commentInputClass,
+      disabled: Boolean(postingComment),
+      name: 'board-comment-text',
+      onInput: 'handleInput',
+      placeholder: 'Write a comment…',
+      value: commentDraft,
+    }),
+    Dom.node(
+      VirtualDomElements.Button,
+      {
+        buttonType: 'submit',
+        className: primaryButtonClass,
+        disabled: Boolean(
+          postingComment ||
+          savingCard ||
+          detailsLoading ||
+          detailsError ||
+          !commentDraft.trim(),
+        ),
+      },
+      [Dom.textNode(postingComment ? 'Posting…' : 'Post comment')],
+    ),
+    ...(commentError
+      ? [
+          Dom.node(
+            VirtualDomElements.Div,
+            { className: 'BoardDialogError', role: 'alert' },
+            [Dom.textNode(commentError)],
+          ),
+        ]
+      : []),
+  ])
+}
+
 const renderActivity = (state: BoardState): Dom.Node => {
   const { details, detailsError } = state
   const now = Date.now()
@@ -473,6 +523,7 @@ const renderActivity = (state: BoardState): Dom.Node => {
     },
     [
       Dom.heading(3, 'BoardDetailHeading', 'Comments and activity'),
+      ...(details ? [renderCommentComposer(state)] : []),
       ...(detailsError
         ? [
             Dom.node(
@@ -546,6 +597,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
     editingCard,
     editingTitle,
     editName,
+    postingComment,
     savingCard,
   } = state
   if (!editingCard) return undefined
@@ -562,7 +614,9 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
         }),
       ],
     )
-  const editingDisabled = Boolean(detailsError || detailsLoading)
+  const editingDisabled = Boolean(
+    detailsError || detailsLoading || postingComment,
+  )
   const status =
     board?.lists.find((list) => list.id === editingCard.idList)?.name ||
     'Unknown list'
@@ -587,6 +641,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
           ),
           Dom.button('board-card-cancel', '', 'BoardDialogClose', {
             ariaLabel: 'Close card',
+            disabled: Boolean(postingComment),
           }),
         ]),
         Dom.div('BoardDialogBody', [
