@@ -549,8 +549,8 @@ export const createInstance = async (
       detailsError,
       detailsLoading,
       editDesc = '',
-      editName,
       editingCard,
+      editName,
     } = state
     if (!editingCard || detailsError || detailsLoading) return true
     const name = editName?.trim() || editingCard.name
@@ -568,20 +568,22 @@ export const createInstance = async (
     }
   }
   const finishTitleEdit = (): void => {
-    const { editName, editingCard, editingTitle } = state
+    const { editingCard, editingTitle, editName } = state
     if (!editingCard || !editingTitle) return
     state = {
       ...state,
-      editName: editName?.trim() || editingCard.name,
       editingTitle: false,
+      editName: editName?.trim() || editingCard.name,
     }
     void saveCard()
     void notify()
   }
   const dismissEditor = async (): Promise<void> => {
+    const { editError } = state
     const requestGeneration = generation
-    if (!state.editError && !(await saveCard())) return
-    if (requestGeneration !== generation || !state.editingCard) return
+    const canClose = Boolean(editError) || (await saveCard())
+    const { editingCard } = state
+    if (!canClose || requestGeneration !== generation || !editingCard) return
     closeEditor()
     cancel()
     void notify()
@@ -1101,8 +1103,8 @@ export const createInstance = async (
       editDescription: false,
       editError: undefined,
       editingCard: card,
-      editName: card.name,
       editingTitle: false,
+      editName: card.name,
       renderedDescription: undefined,
       renderedDescriptionText: undefined,
       savingCard: false,
@@ -1387,13 +1389,13 @@ export const createInstance = async (
       void moveCard(name)
     },
     handleDialogKeyDown(key: unknown): void {
-      const { editingCard, optionsOpen } = state
+      const { editingCard, editingTitle, optionsOpen } = state
       if (key === 'Escape' && optionsOpen) {
         state = { ...state, optionsOpen: false }
         return
       }
       if (key === 'Escape' && editingCard) void dismissEditor()
-      if (key === 'Enter' && state.editingTitle) {
+      if (key === 'Enter' && editingTitle) {
         focusCardTitle = !focusCardTitle
         finishTitleEdit()
       }

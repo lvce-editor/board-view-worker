@@ -20,6 +20,7 @@ const descriptionInputClass = mergeClassNames(
   'BoardInput',
   'BoardDescriptionInput',
 )
+const titleInputClass = mergeClassNames('BoardInput', 'BoardDialogTitleInput')
 const searchInputClass = mergeClassNames('BoardInput', 'BoardSearchInput')
 
 interface CardDraft {
@@ -440,11 +441,10 @@ const renderActivityDate = (value: string, now: number): Dom.Node => {
   const date = new Date(value)
   const minutes = (date.getTime() - now) / 60_000
   const unit = activityTimeUnits.find(([, size]) => Math.abs(minutes) >= size)
+  const fallback = Number.isNaN(minutes) ? value : 'Just now'
   const label = unit
     ? relativeTime.format(Math.trunc(minutes / unit[1]), unit[0])
-    : Number.isNaN(minutes)
-      ? value
-      : 'Just now'
+    : fallback
   return Dom.node(
     VirtualDomElements.Span,
     {
@@ -593,10 +593,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
               editingTitle
                 ? Dom.node(VirtualDomElements.Input, {
                     ariaLabel: 'Title',
-                    className: mergeClassNames(
-                      'BoardInput',
-                      'BoardDialogTitleInput',
-                    ),
+                    className: titleInputClass,
                     inputType: 'text',
                     name: 'edit-card-name',
                     onBlur: 'handleBlur',
