@@ -624,6 +624,9 @@
   font-size: 16px;
   font-weight: 650;
 }
+.BoardDialogActivity .BoardDetailHeading {
+  margin-bottom: 8px;
+}
 .BoardDetailEmpty {
   line-height: 1.5;
 }
@@ -659,17 +662,33 @@
   margin-top: 12px;
 }
 .BoardDialogTitle {
-  margin: 0;
+  margin: 0 -8px;
   font-size: 26px;
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
-.BoardDialogMain > .BoardField {
-  gap: 10px;
-  font-weight: 600;
+.BoardDialogTitleButton,
+.BoardDialogTitleInput {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font: inherit;
+  text-align: start;
 }
-.BoardDialogMain .BoardInput {
-  font-weight: 400;
+.BoardDialogTitleButton {
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  cursor: text;
+  overflow-wrap: anywhere;
+}
+.BoardDialogTitleButton:enabled:hover {
+  background: var(--BoardHover);
+}
+.BoardDialogTitleButton:focus-visible {
+  outline: 2px solid var(--BoardFocus);
 }
 .BoardDialogMain .BoardInput:focus-visible {
   border-color: var(--BoardFocus);
@@ -723,11 +742,9 @@
   color: #8c1d18;
   line-height: 1.5;
 }
-.BoardDialogActions {
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
+.BoardDialogError .BoardButton {
+  display: block;
+  margin-top: 8px;
 }
 .BoardCardCover {
   display: block;

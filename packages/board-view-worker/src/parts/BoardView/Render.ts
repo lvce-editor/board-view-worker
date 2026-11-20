@@ -50,6 +50,7 @@ export interface BoardState {
   readonly editDescription?: boolean
   readonly editError?: string | undefined
   readonly editingCard?: TrelloCard | undefined
+  readonly editingTitle?: boolean
   readonly editName?: string
   readonly error: BoardError | undefined
   readonly loading: boolean
@@ -425,8 +426,38 @@ const renderBadges = (card: Readonly<TrelloCard>): readonly Dom.Node[] => {
   return badges.length > 0 ? [Dom.div('BoardCardBadges', badges)] : []
 }
 
+const relativeTime = new Intl.RelativeTimeFormat('en', { numeric: 'always' })
+const activityTimeUnits = [
+  ['year', 365 * 24 * 60],
+  ['month', 30 * 24 * 60],
+  ['week', 7 * 24 * 60],
+  ['day', 24 * 60],
+  ['hour', 60],
+  ['minute', 1],
+] as const
+
+const renderActivityDate = (value: string, now: number): Dom.Node => {
+  const date = new Date(value)
+  const minutes = (date.getTime() - now) / 60_000
+  const unit = activityTimeUnits.find(([, size]) => Math.abs(minutes) >= size)
+  const label = unit
+    ? relativeTime.format(Math.trunc(minutes / unit[1]), unit[0])
+    : Number.isNaN(minutes)
+      ? value
+      : 'Just now'
+  return Dom.node(
+    VirtualDomElements.Span,
+    {
+      className: 'BoardActivityDate',
+      title: Number.isNaN(minutes) ? value : date.toLocaleString(),
+    },
+    [Dom.textNode(label)],
+  )
+}
+
 const renderActivity = (state: BoardState): Dom.Node => {
   const { details, detailsError } = state
+  const now = Date.now()
   const emptyActivity = detailsError
     ? []
     : [
@@ -463,13 +494,7 @@ const renderActivity = (state: BoardState): Dom.Node => {
             Dom.div('BoardActivity', [
               Dom.div('BoardActivityAuthor', [Dom.textNode(activity.author)]),
               Dom.div('BoardActivityText', [Dom.textNode(activity.text)]),
-              Dom.div('BoardActivityDate', [
-                Dom.textNode(
-                  Number.isNaN(Date.parse(activity.date))
-                    ? activity.date
-                    : new Date(activity.date).toLocaleString(),
-                ),
-              ]),
+              renderActivityDate(activity.date, now),
             ]),
           )
         : emptyActivity),
@@ -518,6 +543,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
     editDescription,
     editError,
     editingCard,
+    editingTitle,
     editName,
     savingCard,
   } = state
@@ -530,17 +556,18 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
         Dom.node(VirtualDomElements.Span, { role: 'status' }, [
           Dom.textNode('Loading card details…'),
         ]),
-        Dom.button('board-card-cancel', 'Cancel', 'BoardButton'),
+        Dom.button('board-card-cancel', '', 'BoardDialogClose', {
+          ariaLabel: 'Close card',
+        }),
       ],
     )
-  const disabled = Boolean(savingCard || detailsError)
   const status =
     board?.lists.find((list) => list.id === editingCard.idList)?.name ||
     'Unknown list'
   return Dom.node(
     VirtualDomElements.Div,
     {
-      ariaLabel: 'Edit Trello card',
+      ariaLabel: 'Card details',
       ariaModal: true,
       className: 'BoardDialogOverlay',
       onClick: 'handleDialogOverlayClick',
@@ -558,13 +585,33 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
           ),
           Dom.button('board-card-cancel', '', 'BoardDialogClose', {
             ariaLabel: 'Close card',
-            disabled: Boolean(savingCard),
           }),
         ]),
         Dom.div('BoardDialogBody', [
-          Dom.form('board-card-edit', 'BoardDialogMain', [
-            Dom.heading(2, 'BoardDialogTitle', 'Edit card'),
-            input('edit-card-name', 'Title', editName, disabled),
+          Dom.div('BoardDialogMain', [
+            Dom.heading(2, 'BoardDialogTitle', [
+              editingTitle
+                ? Dom.node(VirtualDomElements.Input, {
+                    ariaLabel: 'Title',
+                    className: mergeClassNames(
+                      'BoardInput',
+                      'BoardDialogTitleInput',
+                    ),
+                    inputType: 'text',
+                    name: 'edit-card-name',
+                    onBlur: 'handleBlur',
+                    onInput: 'handleInput',
+                    value: editName ?? editingCard.name,
+                  })
+                : Dom.button(
+                    'board-card-title-edit',
+                    editName ?? editingCard.name,
+                    'BoardDialogTitleButton',
+                    {
+                      disabled: Boolean(detailsError),
+                    },
+                  ),
+            ]),
             Dom.node(
               VirtualDomElements.Section,
               {
@@ -575,13 +622,13 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                 Dom.div('BoardDescriptionHeader', [
                   Dom.heading(3, 'BoardDetailHeading', 'Description'),
                   Dom.node(VirtualDomElements.Input, {
-                    ariaLabel: editDescription ? 'Preview' : 'Edit description',
+                    ariaLabel: editDescription ? 'Preview' : 'Edit',
                     className: 'BoardButton',
-                    ...(disabled && { disabled: true }),
+                    ...(detailsError && { disabled: true }),
                     inputType: 'button',
                     name: 'board-description-edit',
                     onClick: 'handleClick',
-                    value: editDescription ? 'Preview' : 'Edit description',
+                    value: editDescription ? 'Preview' : 'Edit',
                   }),
                 ]),
                 ...(editDescription
@@ -594,7 +641,6 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                           Dom.node(VirtualDomElements.TextArea, {
                             ariaLabel: 'Markdown source',
                             className: descriptionInputClass,
-                            ...(disabled && { disabled: true }),
                             name: 'edit-card-desc',
                             onInput: 'handleInput',
                             value: editDesc || '',
@@ -634,24 +680,26 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                   Dom.node(
                     VirtualDomElements.Div,
                     { className: 'BoardDialogError', role: 'alert' },
-                    [Dom.textNode(editError)],
+                    [
+                      Dom.textNode(editError),
+                      Dom.button(
+                        'board-card-save-retry',
+                        'Try again',
+                        'BoardButton',
+                      ),
+                    ],
                   ),
                 ]
               : []),
-            Dom.div('BoardDialogActions', [
-              Dom.button('board-card-cancel', 'Cancel', 'BoardButton', {
-                disabled: Boolean(savingCard),
-              }),
-              Dom.node(
-                VirtualDomElements.Button,
-                {
-                  buttonType: 'submit',
-                  className: primaryButtonClass,
-                  disabled: disabled || !(editName || '').trim(),
-                },
-                [Dom.textNode(savingCard ? 'Saving…' : 'Save changes')],
-              ),
-            ]),
+            ...(savingCard
+              ? [
+                  Dom.node(
+                    VirtualDomElements.Div,
+                    { className: 'BoardActivityDate', role: 'status' },
+                    [Dom.textNode('Saving…')],
+                  ),
+                ]
+              : []),
           ]),
           renderActivity(state),
         ]),

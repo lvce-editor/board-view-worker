@@ -560,7 +560,7 @@ test('groups cards without dropping empty columns', () => {
   expect(JSON.stringify(dom)).toContain('Empty (0)')
 })
 
-test('opens a card editor and updates the board only after Trello confirms the save', async () => {
+test('saves a title on blur and updates the board after Trello confirms', async () => {
   const host = createHost()
   const view = await createInstance(createContext(), host)
   await view.handleEvent?.({
@@ -576,12 +576,13 @@ test('opens a card editor and updates the board only after Trello confirms the s
   expect(
     view.renderFocus?.(previousFocusContext, view.getContext?.() || {}),
   ).toBe('[role="dialog"]')
-  expect(JSON.stringify(await view.render())).toContain('Edit card')
+  expect(JSON.stringify(await view.render())).toContain('BoardDialogOverlay')
   expect(JSON.stringify(await view.render())).not.toContain('"autoFocus":true')
   expect(JSON.stringify(await view.render())).toContain('Details')
   expect(JSON.stringify(await view.render())).not.toContain('edit-card-desc')
   await view.handleEvent?.({ name: 'board-description-edit', type: 'click' })
   expect(JSON.stringify(await view.render())).toContain('edit-card-desc')
+  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
   await view.handleEvent?.({
     name: 'edit-card-name',
     type: 'input',
@@ -592,7 +593,7 @@ test('opens a card editor and updates the board only after Trello confirms the s
     type: 'input',
     value: 'New details',
   })
-  await view.handleEvent?.({ name: 'board-card-edit', type: 'submit' })
+  await view.handleEvent?.({ name: 'edit-card-name', type: 'blur' })
   await flush()
   expect(host.updateCard).toHaveBeenCalledWith(
     'one',
@@ -602,11 +603,44 @@ test('opens a card editor and updates the board only after Trello confirms the s
   )
   const dom = JSON.stringify(await view.render())
   expect(dom).toContain('Renamed')
-  expect(dom).not.toContain('Edit card')
+  expect(dom).toContain('BoardDialogOverlay')
   expect(host.session.get('5k8NLHLh')?.board.cards[0]).toMatchObject({
     desc: 'New details',
     name: 'Renamed',
   })
+})
+
+test('saves description changes when returning to the preview', async () => {
+  const host = createHost()
+  const view = await openBoard(host)
+  await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
+  await flush()
+  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
+  await view.handleEvent?.({
+    name: 'edit-card-name',
+    type: 'input',
+    value: '  ',
+  })
+  await view.handleEvent?.({ name: 'edit-card-name', type: 'blur' })
+  expect(host.updateCard).not.toHaveBeenCalled()
+
+  await view.handleEvent?.({ name: 'board-description-edit', type: 'click' })
+  await view.handleEvent?.({
+    name: 'edit-card-desc',
+    type: 'input',
+    value: 'Revised description',
+  })
+  await view.handleEvent?.({ name: 'board-description-edit', type: 'click' })
+  await flush()
+  expect(host.updateCard).toHaveBeenCalledWith(
+    'one',
+    'A task',
+    'Revised description',
+    expect.any(AbortSignal),
+  )
+  expect(JSON.stringify(await view.render())).toContain('Revised description')
+  await view.handleEvent?.({ name: 'board-card-cancel', type: 'click' })
+  expect(host.updateCard).toHaveBeenCalledTimes(1)
 })
 
 test('retains the draft after a failed card save and lets users retry or cancel', async () => {
@@ -627,25 +661,31 @@ test('retains the draft after a failed card save and lets users retry or cancel'
   await flush()
   await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
   await flush()
+  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
   await view.handleEvent?.({
     name: 'edit-card-name',
     type: 'input',
     value: 'Draft title',
   })
-  await view.handleEvent?.({ name: 'board-card-edit', type: 'submit' })
+  await view.handleEvent?.({ name: 'edit-card-name', type: 'blur' })
   await flush()
   const failedDom = JSON.stringify(await view.render())
   expect(failedDom).toContain('Draft title')
   expect(failedDom).toContain('Reconnect Trello and allow board editing.')
-  expect(failedDom).toContain('Edit card')
+  expect(failedDom).toContain('BoardDialogOverlay')
   expect(host.session.get('5k8NLHLh')?.board.cards[0]?.name).toBe('A task')
   await view.handleEvent?.({ name: 'board-card-cancel', type: 'click' })
-  expect(JSON.stringify(await view.render())).not.toContain('Edit card')
+  expect(JSON.stringify(await view.render())).not.toContain(
+    'BoardDialogOverlay',
+  )
   await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
   await flush()
   const oldFocusContext = view.getContext?.() || {}
   view.handleDialogKeyDown('Escape')
-  expect(JSON.stringify(await view.render())).not.toContain('Edit card')
+  await flush()
+  expect(JSON.stringify(await view.render())).not.toContain(
+    'BoardDialogOverlay',
+  )
   expect(view.renderFocus?.(oldFocusContext, view.getContext?.() || {})).toBe(
     '[name="board-card:one"]',
   )
@@ -1331,12 +1371,13 @@ test('newly created cards can be edited without losing existing cards', async ()
   await flush()
   await view.handleEvent?.({ name: 'board-card:new', type: 'click' })
   await flush()
+  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
   await view.handleEvent?.({
     name: 'edit-card-name',
     type: 'input',
     value: 'Edited new task',
   })
-  await view.handleEvent?.({ name: 'board-card-edit', type: 'submit' })
+  await view.handleEvent?.({ name: 'edit-card-name', type: 'blur' })
   await flush()
   expect(host.updateCard).toHaveBeenCalledWith(
     'new',
@@ -1390,24 +1431,30 @@ test('failed detail loads can be retried and saving waits for complete details',
   jest.mocked(host.loadCard).mockRejectedValueOnce(new Error('Offline'))
   const view = await openBoard(host)
   await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
-  await view.handleEvent?.({ name: 'board-card-edit', type: 'submit' })
+  await view.handleEvent?.({ name: 'edit-card-name', type: 'blur' })
   expect(host.updateCard).not.toHaveBeenCalled()
   await flush()
   expect(JSON.stringify(await view.render())).toContain(
     'Unable to load card details',
   )
-  await view.handleEvent?.({ name: 'board-card-edit', type: 'submit' })
+  await view.handleEvent?.({ name: 'edit-card-name', type: 'blur' })
   expect(host.updateCard).not.toHaveBeenCalled()
   await view.handleEvent?.({ name: 'board-card-details-retry', type: 'click' })
   await flush()
   expect(JSON.stringify(await view.render())).not.toContain(
     'Unable to load card details',
   )
-  await view.handleEvent?.({ name: 'board-card-edit', type: 'submit' })
+  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
+  await view.handleEvent?.({
+    name: 'edit-card-name',
+    type: 'input',
+    value: 'Renamed',
+  })
+  await view.handleEvent?.({ name: 'edit-card-name', type: 'blur' })
   await flush()
   expect(host.updateCard).toHaveBeenCalledWith(
     'one',
-    'A task',
+    'Renamed',
     'Details',
     expect.anything(),
   )
@@ -1450,6 +1497,7 @@ test('clicking the card dialog backdrop closes it while interior clicks preserve
   dialogView.handleDialogOverlayClick('BoardDialog')
   expect(JSON.stringify(await view.render())).toContain('BoardDialogOverlay')
   dialogView.handleDialogOverlayClick('BoardDialogOverlay')
+  await flush()
   expect(JSON.stringify(await view.render())).not.toContain(
     'BoardDialogOverlay',
   )

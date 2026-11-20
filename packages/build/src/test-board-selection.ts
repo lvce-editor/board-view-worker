@@ -31,6 +31,7 @@ export const testBoardSelection = async (
   const boardLoads: string[] = []
   const coverLoads: string[] = []
   const moveRequests: string[] = []
+  const cardEdits: { desc: string; name: string }[] = []
   await context.route(`${backend}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path === authPath) {
@@ -49,8 +50,19 @@ export const testBoardSelection = async (
     let body: unknown
     let status = 200
     if (route.request().method() === 'PUT') {
-      moveRequests.push(path)
-      body = {}
+      const fields = route.request().postDataJSON()
+      if (typeof fields?.name === 'string') {
+        cardEdits.push(fields)
+        body = {
+          ...fields,
+          id: path.slice(path.lastIndexOf('/') + 1),
+          idList: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+          pos: 1,
+        }
+      } else {
+        moveRequests.push(path)
+        body = {}
+      }
     } else if (path.endsWith('/status')) {
       body = { configured: true, connected }
     } else if (path.endsWith('/connect')) {
@@ -233,19 +245,20 @@ export const testBoardSelection = async (
     if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa') {
       detailLoads++
       await releaseDetails.promise
+      const activityNow = Date.now()
       await route.fulfill({
         headers: { 'Access-Control-Allow-Origin': '*' },
         json: {
           actions: [
             {
               data: { text: 'Please review the attached design.' },
-              date: '2026-11-16T12:00:00.000Z',
+              date: new Date(activityNow).toISOString(),
               memberCreator: { fullName: 'Board member' },
               type: 'commentCard',
             },
             {
               data: {},
-              date: '2026-11-15T12:00:00.000Z',
+              date: new Date(activityNow - 60_000).toISOString(),
               memberCreator: { fullName: 'Board member' },
               type: 'createCard',
             },
@@ -599,7 +612,7 @@ export const testBoardSelection = async (
         .getByRole('button', { exact: false, name: 'Card with cover' })
         .click(),
     ])
-    const dialog = page.getByRole('dialog', { name: 'Edit Trello card' })
+    const dialog = page.getByRole('dialog', { name: 'Card details' })
     const cardHash = '#22222222/card/aaaaaaaaaaaaaaaaaaaaaaaa'
     await page.waitForURL((url) => url.hash === cardHash)
     const cardUrl = page.url()
@@ -639,7 +652,7 @@ export const testBoardSelection = async (
     assert.equal(await dialog.getByLabel('Status: Todo').textContent(), 'Todo')
     assert.equal(await dialog.locator('.BoardDescriptionMarkdown').count(), 1)
     const descriptionEdit = dialog.getByRole('button', {
-      name: 'Edit description',
+      name: 'Edit',
     })
     assert.equal(
       await descriptionEdit.evaluate((button) => button.getAttribute('type')),
@@ -661,6 +674,19 @@ export const testBoardSelection = async (
       'https://example.com/design.png',
     )
     await dialog.getByText('Created this card', { exact: true }).waitFor()
+    await dialog.getByText('Just now', { exact: true }).waitFor()
+    await dialog.getByText('1 minute ago', { exact: true }).waitFor()
+    await dialog.getByRole('heading', { name: 'Card with cover' }).waitFor()
+    assert.equal(
+      await dialog.getByRole('textbox', { name: 'Title' }).count(),
+      0,
+    )
+    assert.equal(
+      await dialog
+        .getByRole('button', { name: /^(Cancel|Save changes)$/u })
+        .count(),
+      0,
+    )
     const dialogBox = await page.locator('.BoardDialog').boundingBox()
     assert.ok(
       dialogBox && dialogBox.width > 900,
@@ -700,7 +726,10 @@ export const testBoardSelection = async (
       await page.screenshot({
         path: process.env.BOARD_DETAIL_MOBILE_SCREENSHOT,
       })
-    await dialog.getByRole('textbox', { name: 'Title' }).click()
+    await dialog
+      .getByRole('button', { name: 'Card with cover', exact: true })
+      .click()
+    await dialog.getByRole('textbox', { name: 'Title' }).waitFor()
     await dialog.waitFor()
     await page
       .locator('.BoardDialogOverlay')
@@ -1097,12 +1126,37 @@ export const testBoardSelection = async (
     deepLink.searchParams.set('card-url-test', 'retained')
     await directPage.goto(deepLink.href)
     const directDialog = directPage.getByRole('dialog', {
-      name: 'Edit Trello card',
+      name: 'Card details',
     })
+    const titleButton = directDialog.getByRole('button', {
+      name: 'Card with cover',
+      exact: true,
+    })
+    await titleButton.waitFor()
+    await directPage.reload()
+    await titleButton.focus()
+    await directPage.keyboard.press('Enter')
     const directTitle = directDialog.getByRole('textbox', { name: 'Title' })
     assert.equal(await directTitle.inputValue(), 'Card with cover')
-    await directPage.reload()
-    assert.equal(await directTitle.inputValue(), 'Card with cover')
+    await directTitle.fill('Renamed card')
+    const savedTitle = directPage.waitForResponse(
+      (response) =>
+        response.request().method() === 'PUT' &&
+        new URL(response.url()).pathname.endsWith(
+          '/cards/aaaaaaaaaaaaaaaaaaaaaaaa',
+        ),
+    )
+    await directTitle.blur()
+    assert.equal((await savedTitle).ok(), true)
+    await directDialog.getByRole('heading', { name: 'Renamed card' }).waitFor()
+    await directDialog
+      .getByText('Saving…', { exact: true })
+      .waitFor({ state: 'detached' })
+    assert.deepEqual(cardEdits, [{ desc: description, name: 'Renamed card' }])
+    await directPage
+      .locator('button[name="board-card:aaaaaaaaaaaaaaaaaaaaaaaa"]')
+      .filter({ hasText: 'Renamed card' })
+      .waitFor()
     await directDialog.getByRole('button', { name: 'Close card' }).click()
     await directPage.waitForURL((url) => url.hash === '#22222222')
     const boardUrl = new URL(directPage.url())

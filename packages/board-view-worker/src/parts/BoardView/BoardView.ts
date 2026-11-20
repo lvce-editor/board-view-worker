@@ -199,6 +199,7 @@ export const createInstance = async (
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   let searchGeneration = 0
   let descriptionGeneration = 0
+  let cardSave: Promise<boolean> | undefined
   let pendingDescriptionKey: string | undefined
   let moveController: AbortController | undefined
   let disposed = false
@@ -222,6 +223,8 @@ export const createInstance = async (
   const { board: initialBoard } = state
   await syncTab(initialBoard?.name || 'Boards', initialBoard?.faviconUrl)
   let focusEditor = false
+  let focusCardTitle = false
+  let focusDescription = false
   let focusNewCard = false
   let focusRestore = false
   let focusCardId = ''
@@ -301,6 +304,7 @@ export const createInstance = async (
   const cancel = (preserveDraft = false): void => {
     const { cardDraft, detailsLoading } = state
     generation++
+    cardSave = undefined
     controller?.abort()
     detailsController?.abort()
     faviconController?.abort()
@@ -482,47 +486,47 @@ export const createInstance = async (
     if (!activeBoard) await syncFavicon('')
     await notify()
   }
-  const saveCard = async (): Promise<void> => {
-    const { detailsError, detailsLoading } = state
-    if (detailsLoading || detailsError) return
-    const {
-      board,
-      boardId,
-      editDesc = '',
-      editingCard,
-      editName = '',
-      savingCard,
-    } = state
-    if (!board || !editingCard || savingCard || !editName.trim()) return
-    cancel()
+  const persistCard = async (
+    card: TrelloCard,
+    name: string,
+    desc: string,
+  ): Promise<boolean> => {
     const requestGeneration = generation
-    controller = new AbortController()
+    const requestController = new AbortController()
+    controller = requestController
     state = { ...state, editError: undefined, savingCard: true }
-    await notify()
+    void notify()
     try {
-      const updatedCard = await host.updateCard(
-        editingCard.id,
-        editName,
-        editDesc,
-        AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
+      const updated = await host.updateCard(
+        card.id,
+        name,
+        desc,
+        AbortSignal.any([
+          requestController.signal,
+          AbortSignal.timeout(30_000),
+        ]),
       )
-      if (disposed || requestGeneration !== generation) return
+      const { board, boardId, details } = state
+      if (disposed || requestGeneration !== generation || !board) return false
+      const updatedCard = { ...card, ...updated }
       const updatedBoard = {
         ...board,
-        cards: board.cards.map((card) =>
-          card.id === updatedCard.id ? updatedCard : card,
+        cards: board.cards.map((item) =>
+          item.id === card.id ? { ...item, ...updated } : item,
         ),
       }
       host.session.set(boardId, { board: updatedBoard })
       state = {
         ...state,
         board: updatedBoard,
-        editError: undefined,
+        ...(details && { details: { ...details, desc } }),
+        editingCard: updatedCard,
         savingCard: false,
       }
-      closeEditor()
+      void notify()
+      return true
     } catch (error) {
-      if (disposed || requestGeneration !== generation) return
+      if (disposed || requestGeneration !== generation) return false
       state = {
         ...state,
         editError:
@@ -531,8 +535,56 @@ export const createInstance = async (
             : 'Unable to save this card. Check your connection and try again.',
         savingCard: false,
       }
+      void notify()
+      return false
     }
-    await notify()
+  }
+  const saveCard = async (): Promise<boolean> => {
+    const requestGeneration = generation
+    while (cardSave) {
+      if (!(await cardSave) || requestGeneration !== generation) return false
+    }
+    const {
+      details,
+      detailsError,
+      detailsLoading,
+      editDesc = '',
+      editName,
+      editingCard,
+    } = state
+    if (!editingCard || detailsError || detailsLoading) return true
+    const name = editName?.trim() || editingCard.name
+    if (
+      name === editingCard.name &&
+      editDesc === (details?.desc ?? editingCard.desc ?? '')
+    )
+      return true
+    const save = persistCard(editingCard, name, editDesc)
+    cardSave = save
+    try {
+      return await save
+    } finally {
+      if (cardSave === save) cardSave = undefined
+    }
+  }
+  const finishTitleEdit = (): void => {
+    const { editName, editingCard, editingTitle } = state
+    if (!editingCard || !editingTitle) return
+    state = {
+      ...state,
+      editName: editName?.trim() || editingCard.name,
+      editingTitle: false,
+    }
+    void saveCard()
+    void notify()
+  }
+  const dismissEditor = async (): Promise<void> => {
+    const requestGeneration = generation
+    if (!state.editError && !(await saveCard())) return
+    if (requestGeneration !== generation || !state.editingCard) return
+    closeEditor()
+    cancel()
+    void notify()
   }
   const moveCard = async (listName: string): Promise<void> => {
     const { board: currentBoard, draggedCardId } = state
@@ -1050,6 +1102,7 @@ export const createInstance = async (
       editError: undefined,
       editingCard: card,
       editName: card.name,
+      editingTitle: false,
       renderedDescription: undefined,
       renderedDescriptionText: undefined,
       savingCard: false,
@@ -1146,8 +1199,11 @@ export const createInstance = async (
     if (name === 'board-description-edit') {
       const { editDesc, editDescription } = state
       state = { ...state, editDescription: !editDescription }
-      if (editDescription) void renderDescription(editDesc || '')
-      else {
+      if (editDescription) {
+        void saveCard()
+        void renderDescription(editDesc || '')
+      } else {
+        focusDescription = !focusDescription
         descriptionGeneration++
         pendingDescriptionKey = undefined
       }
@@ -1190,12 +1246,18 @@ export const createInstance = async (
       void loadCardDetails()
       return
     }
+    if (event.name === 'board-card-title-edit') {
+      state = { ...state, editingTitle: true }
+      focusCardTitle = !focusCardTitle
+      return
+    }
     if (handleDescriptionClick(event.name)) return
+    if (event.name === 'board-card-save-retry') {
+      void saveCard()
+      return
+    }
     if (event.name === 'board-card-cancel') {
-      const { savingCard } = state
-      if (savingCard) return
-      closeEditor()
-      cancel()
+      void dismissEditor()
       return
     }
     await changeBoard(event.name)
@@ -1237,8 +1299,8 @@ export const createInstance = async (
       void connect()
       return true
     }
-    if (event.type === 'submit' && event.name === 'board-card-edit') {
-      void saveCard()
+    if (event.type === 'blur' && event.name === 'edit-card-name') {
+      finishTitleEdit()
       return true
     }
     return false
@@ -1279,7 +1341,13 @@ export const createInstance = async (
         }
       })()
     },
-    getContext: () => ({ focusEditor, focusNewCard, focusRestore }),
+    getContext: () => ({
+      focusCardTitle,
+      focusDescription,
+      focusEditor,
+      focusNewCard,
+      focusRestore,
+    }),
     // View commands are serialized: return before waiting for a rerender
     // queued behind this command, including the optimistic drop frame.
     handleBoardDragEnd(): void {
@@ -1319,20 +1387,19 @@ export const createInstance = async (
       void moveCard(name)
     },
     handleDialogKeyDown(key: unknown): void {
-      const { editingCard, optionsOpen, savingCard } = state
+      const { editingCard, optionsOpen } = state
       if (key === 'Escape' && optionsOpen) {
         state = { ...state, optionsOpen: false }
         return
       }
-      if (key !== 'Escape' || !editingCard || savingCard) return
-      closeEditor()
-      cancel()
+      if (key === 'Escape' && editingCard) void dismissEditor()
+      if (key === 'Enter' && state.editingTitle) {
+        focusCardTitle = !focusCardTitle
+        finishTitleEdit()
+      }
     },
     handleDialogOverlayClick(className: unknown): void {
-      const { savingCard } = state
-      if (className !== 'BoardDialogOverlay' || savingCard) return
-      closeEditor()
-      cancel()
+      if (className === 'BoardDialogOverlay') void dismissEditor()
     },
     async handleEvent(event: Readonly<ViewEvent>): Promise<void> {
       if (await handleSearchEvent(event)) return
@@ -1352,7 +1419,19 @@ export const createInstance = async (
       oldContext: Readonly<Record<string, boolean>>,
       newContext: Readonly<Record<string, boolean>>,
     ): string => {
-      const { cardDraft, editingCard } = state
+      const { cardDraft, editingCard, editingTitle } = state
+      if (
+        editingCard &&
+        oldContext.focusCardTitle !== newContext.focusCardTitle
+      )
+        return editingTitle
+          ? '[name="edit-card-name"]'
+          : '[name="board-card-title-edit"]'
+      if (
+        editingCard &&
+        oldContext.focusDescription !== newContext.focusDescription
+      )
+        return '[name="edit-card-desc"]'
       if (oldContext.focusEditor !== newContext.focusEditor && editingCard)
         return '[role="dialog"]'
       if (oldContext.focusNewCard !== newContext.focusNewCard && cardDraft)
