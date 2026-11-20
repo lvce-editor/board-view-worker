@@ -363,9 +363,11 @@ test('discovers board names and background preferences directly from Trello', as
           backgroundImageScaled: [
             {
               url: 'https://trello-backgrounds.s3.amazonaws.com/zebra-small.jpg',
+              width: 480,
             },
             {
               url: 'https://trello-backgrounds.s3.amazonaws.com/zebra-large.jpg',
+              width: 1920,
             },
           ],
         },
@@ -386,6 +388,9 @@ test('discovers board names and background preferences directly from Trello', as
         },
       },
     ]),
+    new Response(new Uint8Array([1, 2, 3]), {
+      headers: { 'Content-Type': 'image/jpeg' },
+    }),
   ])
   const client = createTrelloClient(configuration, request)
   expect(await client.boards(new AbortController().signal)).toEqual([
@@ -397,8 +402,7 @@ test('discovers board names and background preferences directly from Trello', as
       name: 'Gradient',
     },
     {
-      backgroundImage:
-        'https://trello-backgrounds.s3.amazonaws.com/zebra-large.jpg',
+      backgroundImage: 'data:image/jpeg;base64,AQID',
       id: '22222222',
       name: 'Zebra',
     },
@@ -417,6 +421,11 @@ test('discovers board names and background preferences directly from Trello', as
       credentials: 'omit',
       headers: { Authorization: 'Bearer trello-token' },
     }),
+  )
+  expect(request).toHaveBeenNthCalledWith(
+    3,
+    'https://trello-backgrounds.s3.amazonaws.com/zebra-small.jpg',
+    expect.objectContaining({ credentials: 'omit' }),
   )
 })
 
