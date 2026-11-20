@@ -404,6 +404,10 @@ export interface TrelloClient {
     text: string,
     signal: Readonly<AbortSignal>,
   ) => Promise<CardActivity>
+  readonly archiveCard: (
+    id: string,
+    signal: Readonly<AbortSignal>,
+  ) => Promise<void>
   readonly authorize: (
     signal: Readonly<AbortSignal>,
     returnTarget?: TrelloReturnTarget,
@@ -609,7 +613,7 @@ export const createTrelloClient = (
       method,
     }: Readonly<{
       cache?: RequestCache
-      method?: 'GET' | 'POST'
+      method?: 'GET' | 'POST' | 'PUT'
       mapError?: (status: number) => BoardError
     }> = {},
   ): Promise<unknown> => {
@@ -969,7 +973,7 @@ export const createTrelloClient = (
         `search?${new URLSearchParams({
           board_fields: 'name,shortLink',
           boards_limit: '10',
-          card_fields: 'name,idBoard,idList',
+          card_fields: 'name,idBoard,idList,closed',
           cards_limit: '20',
           modelTypes: 'boards,cards',
           partial: 'true',
@@ -996,6 +1000,7 @@ export const createTrelloClient = (
       const cardResults: TrelloSearchResult[] = data.cards.flatMap((item) => {
         if (
           !isRecord(item) ||
+          item.closed === true ||
           typeof item.id !== 'string' ||
           !cardIdPattern.test(item.id) ||
           typeof item.name !== 'string'
@@ -1072,6 +1077,40 @@ export const createTrelloClient = (
       })
     }
   }
+  const archiveCard = async (
+    id: string,
+    signal: Readonly<AbortSignal>,
+  ): Promise<void> => {
+    if (!cardIdPattern.test(id)) {
+      throw new TrelloError({
+        code: 'TRELLO_INVALID_CARD',
+        message: 'This card could not be identified. Refresh the board.',
+      })
+    }
+    const data = await trelloRequest(
+      `cards/${id}?closed=true&fields=closed`,
+      signal,
+      undefined,
+      {
+        mapError: (status) =>
+          status === 404
+            ? {
+                code: 'TRELLO_CARD_NOT_FOUND',
+                message: 'This card could not be found. Refresh the board.',
+              }
+            : boardError(status),
+        method: 'PUT',
+      },
+    )
+    await invalidateCard(id)
+    if (!isRecord(data) || data.id !== id || data.closed !== true) {
+      throw new TrelloError({
+        code: 'TRELLO_INVALID_RESPONSE',
+        message:
+          'Trello did not confirm the archive. Refresh the board to check the card.',
+      })
+    }
+  }
   const moveCard = async (
     cardId: string,
     listId: string,
@@ -1089,6 +1128,7 @@ export const createTrelloClient = (
   }
   return {
     addComment,
+    archiveCard,
     authorize,
     boards,
     cachedBoards,
