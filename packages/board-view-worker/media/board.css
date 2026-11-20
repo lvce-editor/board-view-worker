@@ -33,6 +33,7 @@
   background: var(--BoardBackground);
 }
 .BoardToolbar {
+  container-type: inline-size;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, min(38vw, 380px)) auto;
   align-items: center;
@@ -52,23 +53,18 @@
   position: relative;
   min-width: 0;
 }
-.BoardSearchInput {
-  width: 100%;
-  box-sizing: border-box;
-  min-height: 38px;
-  border-radius: 8px;
-  border-color: color-mix(
-    in srgb,
-    var(--BoardBorder),
-    var(--BoardForeground) 18%
-  );
-  background: var(--BoardInputBackground);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
-}
-.BoardSearchInput:focus-visible {
-  border-color: var(--BoardFocus);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--BoardFocus), transparent 78%);
-  outline: none;
+.BoardSearch::before {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 12px;
+  width: 16px;
+  height: 16px;
+  background: var(--BoardMutedForeground);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='m15.1 15.1 4.9 4.9'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  transform: translateY(-50%);
+  pointer-events: none;
+  content: '';
 }
 .BoardOverflow {
   position: relative;
@@ -106,7 +102,7 @@
   position: absolute;
   z-index: 2;
   top: calc(100% + 4px);
-  left: 0;
+  inset-inline-start: 0;
   width: min(520px, calc(100vw - 32px));
   box-sizing: border-box;
   max-height: 60vh;
@@ -328,6 +324,47 @@
   color: var(--BoardForeground);
   background: var(--BoardInputBackground);
   font: inherit;
+}
+.BoardSearchInput {
+  display: block;
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 8px 12px;
+  padding-inline-start: 36px;
+}
+.BoardSearchInput::placeholder {
+  color: var(--BoardMutedForeground);
+  opacity: 1;
+}
+.BoardToolbar .BoardSearch::before {
+  background: #ffffff;
+}
+.BoardToolbar .BoardSearchInput {
+  color-scheme: dark;
+  border-color: rgb(255 255 255 / 52%);
+  background: color-mix(in srgb, var(--BoardForeground) 72%, transparent);
+  color: #ffffff;
+}
+.BoardToolbar .BoardSearchInput:hover {
+  background: color-mix(in srgb, var(--BoardForeground) 66%, transparent);
+}
+.BoardToolbar .BoardSearchInput::placeholder {
+  color: inherit;
+}
+.BoardToolbar .BoardSearchInput:focus-visible {
+  outline-color: #ffffff;
+  outline-offset: -3px;
+}
+@media (forced-colors: active) {
+  .BoardSearch::before,
+  .BoardToolbar .BoardSearch::before {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+}
+.BoardToolbar .BoardSearchResults {
+  inset-inline: auto 0;
+  width: min(520px, calc(100cqw - 64px));
 }
 .BoardRemembered {
   display: grid;
@@ -740,6 +777,10 @@
   }
   .BoardSearch {
     grid-column: 1;
+  }
+  .BoardToolbar .BoardSearchResults {
+    inset-inline: 0 auto;
+    width: min(520px, 100cqw);
   }
   .BoardOverflow {
     grid-column: 2;

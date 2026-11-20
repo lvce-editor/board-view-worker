@@ -259,9 +259,13 @@ export const testBoardSelection = async (
     page.on('pageerror', (error) =>
       console.error('Board page error:', error.message),
     )
+    const boardOptionsButton = {
+      exact: true,
+      name: 'More board options',
+    }
     const openBoardOptions = async (): Promise<void> => {
       await page
-        .getByRole('button', { exact: true, name: 'More board options' })
+        .getByRole('button', { ...boardOptionsButton, expanded: false })
         .click()
     }
     const bootstrap = new URL('__board-test-bootstrap', baseUrl).href
@@ -815,9 +819,6 @@ export const testBoardSelection = async (
       )
       await refreshButton.click()
       await refreshed
-      await page
-        .getByRole('button', { exact: true, name: 'More board options' })
-        .waitFor({ state: 'visible' })
       await openBoardOptions()
       await page.waitForFunction(() => {
         const button = globalThis.document.querySelector<HTMLButtonElement>(
@@ -826,7 +827,9 @@ export const testBoardSelection = async (
         return button && !button.disabled
       })
       assert.equal(await title.count(), 0)
-      await openBoardOptions()
+      await page
+        .getByRole('button', { ...boardOptionsButton, expanded: true })
+        .click()
     }
     process.stdout.write('Add card focuses title on open and reopen: pass\n')
     await openBoardOptions()
@@ -953,6 +956,33 @@ export const testBoardSelection = async (
       ),
       'rgb(255, 88, 176)',
     )
+    await page.getByRole('button', { name: 'More board options' }).focus()
+    await page.keyboard.press('Shift+Tab')
+    assert.ok(
+      await boardSearch.evaluate(
+        (element) =>
+          globalThis.getComputedStyle(element).outlineStyle === 'solid',
+      ),
+      'The toolbar search is reachable by keyboard with visible focus',
+    )
+    await boardSearch.fill('cover')
+    await page
+      .getByRole('button', { name: 'Card · Card with cover — Engineering' })
+      .waitFor()
+    const searchResults = page.locator('.BoardSearchResults')
+    const toolbar = page.locator('.BoardToolbar')
+    for (const width of [390, 601, 1280]) {
+      await page.setViewportSize({ height: 844, width })
+      const bounds = await searchResults.boundingBox()
+      const toolbarBounds = await toolbar.boundingBox()
+      assert.ok(
+        bounds &&
+          toolbarBounds &&
+          bounds.x >= toolbarBounds.x &&
+          bounds.x + bounds.width <= toolbarBounds.x + toolbarBounds.width,
+        `Search results fit in a ${width}px viewport`,
+      )
+    }
     const gradientIcon = await readBoardIcon()
     assert.ok(gradientIcon.includes('stop-color="#a82be0"'))
     assert.ok(gradientIcon.includes('stop-color="#ff58b0"'))
