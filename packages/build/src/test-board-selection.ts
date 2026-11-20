@@ -230,9 +230,13 @@ export const testBoardSelection = async (
     page.on('pageerror', (error) =>
       console.error('Board page error:', error.message),
     )
+    const boardOptionsButton = {
+      exact: true,
+      name: 'More board options',
+    }
     const openBoardOptions = async (): Promise<void> => {
       await page
-        .getByRole('button', { exact: true, name: 'More board options' })
+        .getByRole('button', { ...boardOptionsButton, expanded: false })
         .click()
     }
     const bootstrap = new URL('__board-test-bootstrap', baseUrl).href
@@ -778,9 +782,6 @@ export const testBoardSelection = async (
       )
       await refreshButton.click()
       await refreshed
-      await page
-        .getByRole('button', { exact: true, name: 'More board options' })
-        .waitFor({ state: 'visible' })
       await openBoardOptions()
       await page.waitForFunction(() => {
         const button = globalThis.document.querySelector<HTMLButtonElement>(
@@ -789,7 +790,9 @@ export const testBoardSelection = async (
         return button && !button.disabled
       })
       assert.equal(await title.count(), 0)
-      await openBoardOptions()
+      await page
+        .getByRole('button', { ...boardOptionsButton, expanded: true })
+        .click()
     }
     process.stdout.write('Add card focuses title on open and reopen: pass\n')
     await openBoardOptions()
