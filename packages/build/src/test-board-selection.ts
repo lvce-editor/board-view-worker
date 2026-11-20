@@ -1224,6 +1224,36 @@ export const testBoardSelection = async (
     assert.equal(boardUrl.pathname, deepLink.pathname)
     assert.equal(boardUrl.search, deepLink.search)
     await directDialog.waitFor({ state: 'detached' })
+    await directPage.setViewportSize({ height: 844, width: 390 })
+    const breadcrumb = directPage.getByRole('navigation', {
+      name: 'Breadcrumb',
+    })
+    await breadcrumb
+      .getByRole('heading', { level: 1, name: 'Engineering' })
+      .waitFor()
+    await directPage.getByRole('searchbox', { name: 'Search boards' }).focus()
+    await directPage.keyboard.press('Shift+Tab')
+    const boardsButton = breadcrumb.getByRole('button', {
+      exact: true,
+      name: 'Boards',
+    })
+    assert.ok(
+      await boardsButton.evaluate(
+        (button) =>
+          button === globalThis.document.activeElement &&
+          globalThis.getComputedStyle(button).outlineStyle === 'solid',
+      ),
+      'Boards is keyboard reachable with visible focus',
+    )
+    await directPage.keyboard.press('Enter')
+    await directPage
+      .getByRole('button', { name: 'Open Engineering', exact: true })
+      .waitFor()
+    assert.equal(await breadcrumb.count(), 0)
+    assert.equal(
+      directPage.url(),
+      new URL(deepLink.pathname + deepLink.search, deepLink).href,
+    )
     await directPage.close()
     process.stdout.write(
       'Card URLs: click, search, direct navigation, reload and dismissal: pass\n',

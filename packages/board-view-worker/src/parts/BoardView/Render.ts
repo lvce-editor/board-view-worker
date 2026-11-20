@@ -798,7 +798,21 @@ const renderToolbar = (state: BoardState): Dom.Node => {
         : 'BoardToolbar BoardToolbarWithoutBoard',
     },
     [
-      Dom.heading(1, 'BoardTitle', board?.name || 'Boards'),
+      board
+        ? Dom.node(
+            VirtualDomElements.Nav,
+            { ariaLabel: 'Breadcrumb', className: 'BoardBreadcrumb' },
+            [
+              Dom.button('board-overview', 'Boards', 'BoardBreadcrumbButton', {
+                disabled: loading || Boolean(cardDraft?.saving),
+              }),
+              Dom.node(VirtualDomElements.Span, { ariaHidden: true }, [
+                Dom.textNode('/'),
+              ]),
+              Dom.heading(1, 'BoardTitle', board.name),
+            ],
+          )
+        : Dom.heading(1, 'BoardTitle', 'Boards'),
       ...(board ? [renderBoardSearch(state)] : []),
       ...(board
         ? [

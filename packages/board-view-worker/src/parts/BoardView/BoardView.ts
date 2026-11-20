@@ -1229,15 +1229,22 @@ export const createInstance = async (
     void syncBoardHash()
   }
   const changeBoard = async (name: string | undefined): Promise<void> => {
-    if (name !== 'board-change' && !name?.startsWith('board-select:')) return
+    const showOverview = name === 'board-overview'
+    if (
+      !showOverview &&
+      name !== 'board-change' &&
+      !name?.startsWith('board-select:')
+    )
+      return
     cancel()
     searchGeneration++
     searchController?.abort()
     if (searchTimer) clearTimeout(searchTimer)
+    const { accountConnected, boards } = state
     state = {
       ...state,
       board: undefined,
-      boardId: name.startsWith('board-select:')
+      boardId: name?.startsWith('board-select:')
         ? name.slice('board-select:'.length)
         : '',
       editError: undefined,
@@ -1245,13 +1252,15 @@ export const createInstance = async (
       error: undefined,
       loading: false,
       optionsOpen: false,
-      providerSelected: false,
+      providerSelected: showOverview && Boolean(accountConnected),
       savingCard: false,
       searchQuery: '',
     }
     const { boardId } = state
     await setBoardHash(host, boardId ? getBoardHash(boardId) : '')
     await restoreConnection(boardId)
+    if (showOverview && !disposed && (!accountConnected || boards.length === 0))
+      void checkAccount(true)
     if (boardId && !host.session.get(boardId)) void connect()
   }
   const openSearchCard = async (id: string): Promise<void> => {
