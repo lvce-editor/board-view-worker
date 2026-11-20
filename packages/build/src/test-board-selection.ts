@@ -20,6 +20,9 @@ export const testBoardSelection = async (
   let imageLoads = 0
   let empty = false
   let fail = false
+  let connected = true
+  const createRequests: { idList: string; name: string }[] = []
+  const authPath = '/auth/trello/connect'
   const discoveryLoads: string[] = []
   const proxiedLoads: string[] = []
   const boardLoads: string[] = []
@@ -27,6 +30,18 @@ export const testBoardSelection = async (
   const moveRequests: string[] = []
   await context.route(`${backend}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname
+    if (path === authPath) {
+      assert.equal(
+        new URL(route.request().url()).searchParams.get('ticket'),
+        'reconnect',
+      )
+      connected = true
+      await route.fulfill({
+        body: 'Trello connected.',
+        contentType: 'text/plain',
+      })
+      return
+    }
     assert.equal(route.request().headers().authorization, 'Bearer board-test')
     let body: unknown
     let status = 200
@@ -34,7 +49,21 @@ export const testBoardSelection = async (
       moveRequests.push(path)
       body = {}
     } else if (path.endsWith('/status')) {
-      body = { configured: true, connected: true }
+      body = { configured: true, connected }
+    } else if (path.endsWith('/connect')) {
+      assert.equal(route.request().method(), 'POST')
+      connected = false
+      body = { url: `${backend}${authPath}?ticket=reconnect` }
+    } else if (path.endsWith('/cards')) {
+      const { idList, name } = route.request().postDataJSON()
+      createRequests.push({ idList, name })
+      if (createRequests.length === 1) {
+        body = { code: 'TRELLO_CREATE_FAILED' }
+        status = 403
+      } else {
+        assert.equal(connected, true, 'Card retry follows Trello authorization')
+        body = { id: 'recovered-card', idList, name, pos: 100 }
+      }
     } else if (path.endsWith('/token')) {
       body = { accessToken: 'trello-test' }
     } else if (
@@ -760,13 +789,21 @@ export const testBoardSelection = async (
         'N',
       )
       assert.equal(await title.inputValue(), 'N')
-      // Moving focus outside the composer dismisses it and restores its
-      // original add control.
       await openBoardOptions()
+      assert.equal(await title.inputValue(), 'N')
+      await openBoardOptions()
+      await page
+        .locator('.BoardCardComposer')
+        .getByRole('button', {
+          exact: true,
+          name: 'Cancel',
+        })
+        .click()
       await title.waitFor({ state: 'detached' })
       await page
         .locator(`.BoardAddCard[aria-label="Add a card to ${list}"]`)
         .waitFor()
+      await openBoardOptions()
       const refreshButton = page.getByRole('button', {
         exact: true,
         name: 'Refresh board',
@@ -919,6 +956,68 @@ export const testBoardSelection = async (
     const gradientIcon = await readBoardIcon()
     assert.ok(gradientIcon.includes('stop-color="#a82be0"'))
     assert.ok(gradientIcon.includes('stop-color="#ff58b0"'))
+    await page
+      .getByRole('button', { exact: true, name: 'Add a card to Todo' })
+      .click()
+    const draft = 'Retained Trello draft'
+    await title.fill(draft)
+    const add = page.getByRole('button', { exact: true, name: 'Add card' })
+    await add.click()
+    const reconnect = page.getByRole('button', {
+      exact: true,
+      name: 'Reconnect Trello',
+    })
+    await reconnect.waitFor()
+    await page
+      .getByRole('alert')
+      .filter({ hasText: 'Trello denied access to add this card' })
+      .waitFor()
+    assert.equal(await title.inputValue(), draft)
+    const composer = page.locator('.BoardCardComposer')
+    const composerBox = await composer.boundingBox()
+    const reconnectBox = await reconnect.boundingBox()
+    assert.ok(
+      composerBox &&
+        reconnectBox &&
+        reconnectBox.x >= composerBox.x &&
+        reconnectBox.x + reconnectBox.width <=
+          composerBox.x + composerBox.width,
+      'Reconnect fits inside the composer at a narrow viewport',
+    )
+    if (process.env.BOARD_RECONNECT_SCREENSHOT)
+      await page.screenshot({ path: process.env.BOARD_RECONNECT_SCREENSHOT })
+    await title.focus()
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('Enter')
+    const continueToTrello = page.getByRole('link', {
+      name: 'Continue to Trello',
+    })
+    await continueToTrello.waitFor()
+    assert.equal(await add.isDisabled(), true)
+    await page.getByRole('button', { name: 'Stop waiting' }).click()
+    await reconnect.waitFor()
+    assert.equal(await title.inputValue(), draft)
+    assert.equal(createRequests.length, 1)
+    await reconnect.click()
+    const authorized = context.waitForEvent('page')
+    await continueToTrello.click()
+    const authorizationTab = await authorized
+    await authorizationTab.getByText('Trello connected.').waitFor()
+    await authorizationTab.close()
+    await continueToTrello.waitFor({ state: 'detached' })
+    assert.equal(await title.inputValue(), draft)
+    assert.equal(
+      createRequests.length,
+      1,
+      'Reconnecting does not submit the draft',
+    )
+    await add.click()
+    await page.getByRole('button', { name: draft }).waitFor()
+    assert.deepEqual(createRequests, [
+      { idList: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: draft },
+      { idList: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: draft },
+    ])
+    process.stdout.write('Add card recovers from Trello write denial: pass\n')
     process.stdout.write(
       'standalone Trello discovery, board favicons, clickable board tiles, empty state and retry: pass\n',
     )

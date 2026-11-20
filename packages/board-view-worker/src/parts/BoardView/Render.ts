@@ -23,7 +23,7 @@ const descriptionInputClass = mergeClassNames(
 const searchInputClass = mergeClassNames('BoardInput', 'BoardSearchInput')
 
 interface CardDraft {
-  readonly error?: string | undefined
+  readonly error?: BoardError | undefined
   readonly listId: string
   readonly saving: boolean
   readonly title: string
@@ -85,12 +85,40 @@ const input = (
     }),
   ])
 
+const authorizationActions = (
+  state: Readonly<BoardState>,
+  action: string,
+  label: string,
+): readonly Dom.Node[] => {
+  const { authorizationUrl, authorizing, loading } = state
+  const buttonLabel = authorizing ? 'Preparing connection…' : label
+  const buttonClass =
+    action === 'board-authorize' ? primaryButtonClass : 'BoardButton'
+  return [
+    authorizationUrl
+      ? Dom.link(authorizationUrl, 'Continue to Trello', primaryButtonClass)
+      : Dom.button(action, buttonLabel, buttonClass, {
+          disabled: loading || Boolean(authorizing),
+        }),
+    ...(authorizing
+      ? [
+          Dom.button(
+            'board-cancel-authorization',
+            'Stop waiting',
+            'BoardButton',
+          ),
+        ]
+      : []),
+  ]
+}
+
 const renderComposer = (
   state: BoardState,
   listId: string,
   listName: string,
 ): Dom.Node => {
-  const { cardDraft: draft, loading } = state
+  const { authorizing, cardDraft: draft, loading } = state
+  const busy = loading || Boolean(authorizing)
   if (draft?.listId !== listId)
     return Dom.button(
       `board-add:${listId}`,
@@ -98,17 +126,29 @@ const renderComposer = (
       'BoardButton BoardAddCard',
       {
         ariaLabel: `Add a card to ${listName}`,
-        disabled: Boolean(draft?.saving) || loading,
+        disabled: Boolean(draft?.saving) || busy,
       },
     )
   return Dom.form('board-create-card', 'BoardCardComposer', [
-    input('board-card-title', 'Card title', draft.title, draft.saving),
+    input('board-card-title', 'Card title', draft.title, draft.saving || busy),
     ...(draft.error
       ? [
           Dom.node(
             VirtualDomElements.Div,
             { className: 'BoardCardError', role: 'alert' },
-            [Dom.textNode(draft.error)],
+            [Dom.textNode(draft.error.message)],
+          ),
+        ]
+      : []),
+    ...(draft.error?.code === 'TRELLO_WRITE_DENIED'
+      ? [
+          Dom.div(
+            'BoardCardActions',
+            authorizationActions(
+              state,
+              'board-reconnect-card',
+              'Reconnect Trello',
+            ),
           ),
         ]
       : []),
@@ -120,13 +160,14 @@ const renderComposer = (
           className: primaryButtonClass,
           disabled:
             draft.saving ||
+            busy ||
             !draft.title.trim() ||
             draft.title.trim().length > 16_384,
         },
         [Dom.textNode(draft.saving ? 'Adding…' : 'Add card')],
       ),
       Dom.button('board-cancel-card', 'Cancel', 'BoardButton', {
-        disabled: draft.saving,
+        disabled: draft.saving || busy,
       }),
     ]),
   ])
@@ -271,13 +312,7 @@ const connectionHelp = (state: BoardState): string => {
 }
 
 const renderConnection = (state: BoardState): readonly Dom.Node[] => {
-  const {
-    accountConnected,
-    authorizationUrl,
-    authorizing,
-    loading,
-    searchQuery,
-  } = state
+  const { accountConnected, authorizing, loading, searchQuery } = state
   return accountConnected
     ? [
         Dom.div('BoardCredentialsHelp', [Dom.textNode(connectionHelp(state))]),
@@ -301,33 +336,10 @@ const renderConnection = (state: BoardState): readonly Dom.Node[] => {
               : 'Sign in to LVCE, then authorize Trello to read your boards and add cards.',
           ),
         ]),
-        Dom.div('BoardAuthorizationActions', [
-          ...(authorizationUrl
-            ? [
-                Dom.link(
-                  authorizationUrl,
-                  'Continue to Trello',
-                  primaryButtonClass,
-                ),
-              ]
-            : [
-                Dom.button(
-                  'board-authorize',
-                  authorizing ? 'Preparing connection…' : 'Authorize Trello',
-                  primaryButtonClass,
-                  { disabled: loading || Boolean(authorizing) },
-                ),
-              ]),
-          ...(authorizing
-            ? [
-                Dom.button(
-                  'board-cancel-authorization',
-                  'Stop waiting',
-                  'BoardButton',
-                ),
-              ]
-            : []),
-        ]),
+        Dom.div(
+          'BoardAuthorizationActions',
+          authorizationActions(state, 'board-authorize', 'Authorize Trello'),
+        ),
       ]
 }
 const renderSetup = (state: BoardState): Dom.Node => {

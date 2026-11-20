@@ -290,8 +290,8 @@ export const createInstance = async (
     state = { ...state, draggedCardId: undefined, dropTargetId: undefined }
     await notify()
   }
-  const cancel = (): void => {
-    const { detailsLoading } = state
+  const cancel = (preserveDraft = false): void => {
+    const { cardDraft, detailsLoading } = state
     generation++
     controller?.abort()
     faviconController?.abort()
@@ -300,7 +300,7 @@ export const createInstance = async (
       ...state,
       authorizationUrl: undefined,
       authorizing: false,
-      cardDraft: undefined,
+      cardDraft: preserveDraft && !cardDraft?.saving ? cardDraft : undefined,
       ...(detailsLoading && {
         detailsLoading: false,
         editingCard: undefined,
@@ -357,10 +357,8 @@ export const createInstance = async (
       })
   }
   const connect = async (): Promise<void> => {
-    const { board, cardDraft } = state
-    const draft = board && !cardDraft?.saving ? cardDraft : undefined
-    cancel()
-    state = { ...state, cardDraft: draft }
+    const { board } = state
+    cancel(Boolean(board))
     const requestGeneration = generation
     controller = new AbortController()
     const signal = AbortSignal.any([
@@ -683,8 +681,37 @@ export const createInstance = async (
     }
     await notify()
   }
-  const authorize = async (): Promise<void> => {
-    cancel()
+  const waitForAuthorization = async (
+    signal: Readonly<AbortSignal>,
+  ): Promise<void> => {
+    while (!signal.aborted) {
+      await new Promise<void>((resolve) => {
+        const finish = (): void => {
+          clearTimeout(timer)
+          signal.removeEventListener('abort', finish)
+          resolve()
+        }
+        const timer = setTimeout(finish, 2000)
+        signal.addEventListener('abort', finish, { once: true })
+      })
+      signal.throwIfAborted()
+      const { connected } = await host.status(signal)
+      signal.throwIfAborted()
+      if (connected) return
+    }
+    signal.throwIfAborted()
+  }
+  const cancelAuthorization = (): void => {
+    const { board, cardDraft } = state
+    cancel(Boolean(board))
+    if (cardDraft) focusNewCard = !focusNewCard
+  }
+  const authorize = async (reconnectCard = false): Promise<void> => {
+    const { authorizing, cardDraft, loading } = state
+    if (authorizing || loading) return
+    if (reconnectCard && cardDraft?.error?.code !== 'TRELLO_WRITE_DENIED')
+      return
+    cancel(reconnectCard)
     const requestGeneration = generation
     controller = new AbortController()
     const signal = AbortSignal.any([
@@ -697,37 +724,40 @@ export const createInstance = async (
       if (disposed || generation !== requestGeneration) return
       state = { ...state, authorizationUrl: url }
       await notify()
-      while (!signal.aborted) {
-        await new Promise<void>((resolve) => {
-          const finish = (): void => {
-            clearTimeout(timer)
-            signal.removeEventListener('abort', finish)
-            resolve()
-          }
-          const timer = setTimeout(finish, 2000)
-          signal.addEventListener('abort', finish, { once: true })
-        })
-        signal.throwIfAborted()
-        const result = await host.status(signal)
-        if (disposed || generation !== requestGeneration) return
-        if (result.connected) {
-          state = {
-            ...state,
-            accountConnected: true,
-            authorizationUrl: undefined,
-            authorizing: false,
-            loading: true,
-          }
-          await notify()
-          await loadBoards(signal, requestGeneration)
-          await notify()
-          return
-        }
+      await waitForAuthorization(signal)
+      if (disposed || generation !== requestGeneration) return
+      state = {
+        ...state,
+        accountConnected: true,
+        authorizationUrl: undefined,
+        authorizing: false,
+        loading: !reconnectCard,
       }
-      signal.throwIfAborted()
+      if (reconnectCard && cardDraft) {
+        state = { ...state, cardDraft: { ...cardDraft, error: undefined } }
+        focusNewCard = !focusNewCard
+      } else {
+        await notify()
+        await loadBoards(signal, requestGeneration)
+      }
+      await notify()
     } catch (error) {
       if (disposed || generation !== requestGeneration) return
       connectionError(error)
+      if (reconnectCard && cardDraft) {
+        const { error: failure } = state
+        state = {
+          ...state,
+          cardDraft: {
+            ...cardDraft,
+            error: {
+              code: 'TRELLO_WRITE_DENIED',
+              message: failure?.message || 'Unable to reconnect Trello.',
+            },
+          },
+          error: undefined,
+        }
+      }
       await notify()
     }
   }
@@ -760,12 +790,14 @@ export const createInstance = async (
     await notify()
   }
   const createCard = async (): Promise<void> => {
-    const { board, boardId, cardDraft, editingCard, loading } = state
+    const { authorizing, board, boardId, cardDraft, editingCard, loading } =
+      state
     if (
       !board ||
       editingCard ||
       !cardDraft ||
       cardDraft.saving ||
+      authorizing ||
       loading ||
       !cardDraft.title.trim() ||
       cardDraft.title.trim().length > 16_384 ||
@@ -799,8 +831,12 @@ export const createInstance = async (
           ...cardDraft,
           error:
             error instanceof TrelloError
-              ? error.details.message
-              : 'The card could not be confirmed. Refresh the board before trying again. Your title has been kept.',
+              ? error.details
+              : {
+                  code: 'TRELLO_CREATE_FAILED',
+                  message:
+                    'The card could not be confirmed. Refresh the board before trying again. Your title has been kept.',
+                },
           saving: false,
         },
       }
@@ -808,10 +844,11 @@ export const createInstance = async (
     await notify()
   }
   const openNewCard = (listId: string): void => {
-    const { board, cardDraft, editingCard, loading } = state
+    const { authorizing, board, cardDraft, editingCard, loading } = state
     if (
       !editingCard &&
       !loading &&
+      !authorizing &&
       !cardDraft?.saving &&
       board?.lists.some((list) => list.id === listId)
     ) {
@@ -868,12 +905,10 @@ export const createInstance = async (
   }
   const dismissCardAfterBlur = (): void => {
     const { cardDraft } = state
-    setTimeout(() => {
-      const { cardDraft: currentDraft } = state
-      if (currentDraft !== cardDraft || !cardDraft) return
-      cancelCard()
-      void notify()
-    }, 0)
+    if (!cardDraft || cardDraft.saving || cardDraft.title || cardDraft.error)
+      return
+    cancelCard()
+    void notify()
   }
   const handleInput = (name: string | undefined, value: string): void => {
     const { cardDraft } = state
@@ -1156,10 +1191,11 @@ export const createInstance = async (
     }
     const actions: Readonly<Record<string, () => void | Promise<void>>> = {
       'board-authorize': authorize,
-      'board-cancel-authorization': cancel,
+      'board-cancel-authorization': cancelAuthorization,
       'board-cancel-card': cancelCard,
       'board-check-account': checkAccount,
       'board-disconnect-account': revoke,
+      'board-reconnect-card': () => authorize(true),
     }
     const action = actions[name || '']
     if (!action) return false
@@ -1243,8 +1279,7 @@ export const createInstance = async (
       if (await handleSearchEvent(event)) return
       if (handleNonClickEvent(event)) return
       if (isCardTitleBlur(event)) {
-        // Let the focus transition finish before removing the composer. A
-        // submit click follows the input blur and marks the draft as saving.
+        // Keep entered text when focus moves to a composer action.
         dismissCardAfterBlur()
         return
       }

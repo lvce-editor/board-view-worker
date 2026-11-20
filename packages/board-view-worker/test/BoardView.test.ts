@@ -1224,7 +1224,7 @@ test('retains failed card titles, supports cancel and ignores invalid lists', as
     new TrelloError({
       code: 'TRELLO_WRITE_DENIED',
       message:
-        'Trello rejected this card. Check that you can add cards to this board. If you can, disconnect and reconnect Trello to refresh its access. Your title is still here so you can retry.',
+        'Trello denied access to add this card. If you have permission to add cards to this board, reconnect Trello and try again. Your title has been kept.',
     }),
   )
   const view = await openBoard(host)
@@ -1240,10 +1240,10 @@ test('retains failed card titles, supports cancel and ignores invalid lists', as
   await flush()
   expect(JSON.stringify(await view.render())).toContain('Keep this title')
   expect(JSON.stringify(await view.render())).toContain(
-    'Check that you can add cards to this board. If you can, disconnect and reconnect Trello to refresh its access.',
+    'If you have permission to add cards to this board, reconnect Trello and try again.',
   )
   expect(JSON.stringify(await view.render())).toContain(
-    'Your title is still here so you can retry.',
+    'Your title has been kept.',
   )
   await view.handleEvent?.({ name: 'board-cancel-card', type: 'click' })
   expect(JSON.stringify(await view.render())).not.toContain('Keep this title')
