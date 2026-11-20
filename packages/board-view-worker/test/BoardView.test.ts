@@ -850,30 +850,54 @@ test('an expired Trello connection offers authorization again', async () => {
   expect(JSON.stringify(await view.render())).toContain('Authorize Trello')
 })
 
-test('updates automatically when browser consent completes', async () => {
-  jest.useFakeTimers()
-  const host = createHost()
-  jest
-    .mocked(host.status)
-    .mockResolvedValueOnce({ configured: true, connected: false })
-    .mockResolvedValueOnce({ configured: true, connected: false })
-  const view = await createInstance(createContext(), host)
-  try {
-    await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
-    await jest.advanceTimersByTimeAsync(0)
-    await view.handleEvent?.({ name: 'board-authorize', type: 'click' })
-    await Promise.resolve()
-    expect(JSON.stringify(await view.render())).toContain('Continue to Trello')
-    await jest.advanceTimersByTimeAsync(2000)
-    const dom = JSON.stringify(await view.render())
-    expect(dom).toContain('Trello board')
-    expect(dom).not.toContain('Continue to Trello')
-    expect(dom).not.toContain('Waiting for Trello')
-  } finally {
-    view.dispose?.()
-    jest.useRealTimers()
-  }
-})
+test.each([
+  ['lvce://-/', 'desktop'],
+  ['lvce-oss://-/', 'desktop'],
+  ['https://lvce-editor.github.io/board-view-worker/boards/', 'board'],
+  ['https://lvce-editor.github.io/lvce-editor/boards/', 'editor'],
+  ['https://lvce-editor.github.io/chat-view-2/', undefined],
+] as const)(
+  'updates automatically after consent from %s',
+  async (href, target) => {
+    jest.useFakeTimers()
+    const host = createHost()
+    jest
+      .mocked(host.execute)
+      .mockImplementation(async (command) =>
+        command === 'Layout.getHref' ? href : undefined,
+      )
+    jest
+      .mocked(host.status)
+      .mockResolvedValueOnce({ configured: true, connected: false })
+      .mockResolvedValueOnce({ configured: true, connected: false })
+    const view = await createInstance(createContext(), host)
+    try {
+      await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
+      await jest.advanceTimersByTimeAsync(0)
+      await view.handleEvent?.({ name: 'board-authorize', type: 'click' })
+      await jest.advanceTimersByTimeAsync(0)
+      expect(host.authorize).toHaveBeenCalledWith(expect.anything(), target)
+      expect(host.execute).not.toHaveBeenCalledWith('Layout.focusWindow')
+      expect(JSON.stringify(await view.render())).toContain(
+        'Continue to Trello',
+      )
+      await jest.advanceTimersByTimeAsync(2000)
+      const dom = JSON.stringify(await view.render())
+      expect(
+        jest
+          .mocked(host.execute)
+          .mock.calls.flat()
+          .filter((command) => command === 'Layout.focusWindow'),
+      ).toHaveLength(target === 'desktop' ? 1 : 0)
+      expect(dom).toContain('Trello board')
+      expect(dom).not.toContain('Continue to Trello')
+      expect(dom).not.toContain('Waiting for Trello')
+    } finally {
+      view.dispose?.()
+      jest.useRealTimers()
+    }
+  },
+)
 
 test('opens remembered boards after reload without requesting Trello credentials', async () => {
   const host = createHost()
