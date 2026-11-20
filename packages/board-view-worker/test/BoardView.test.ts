@@ -41,6 +41,9 @@ const createHost = (): BoardHost => ({
   boards: jest
     .fn<BoardHost['boards']>()
     .mockResolvedValue([{ id: '5k8NLHLh', name: 'Work' }]),
+  cachedBoards: jest
+    .fn<BoardHost['cachedBoards']>()
+    .mockResolvedValue(undefined),
   createCard: jest.fn<BoardHost['createCard']>().mockResolvedValue({
     desc: '',
     id: 'new',
@@ -150,6 +153,7 @@ test('shows setup, renders empty lists and saves only board IDs', async () => {
     .mockResolvedValueOnce({ configured: true, connected: false })
   const context = createContext()
   const view = await createInstance(context, host)
+  await flush()
   expect(JSON.stringify(await view.render())).toContain('Connect Trello')
   expect(JSON.stringify(await view.render())).not.toContain('BoardViewTrello')
   expect(JSON.stringify(await view.render())).not.toContain('Trello API key')
@@ -507,8 +511,10 @@ test('restores remembered IDs, never credentials, and disconnects', async () => 
     .mocked(host.status)
     .mockResolvedValueOnce({ configured: true, connected: false })
   const view = await createInstance(createContext(), host)
+  await flush()
   expect(JSON.stringify(await view.render())).toContain('Connect Trello')
   await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
+  await flush()
   expect(JSON.stringify(await view.render())).toContain('5k8NLHLh')
   expect(host.load).not.toHaveBeenCalled()
   await view.handleEvent?.({ name: 'board-connect', type: 'submit' })
@@ -888,6 +894,34 @@ test('discovers Trello boards automatically on entry and reload', async () => {
   reloadedView.dispose?.()
 })
 
+test('keeps a cached board list on a transient error and clears it when Trello disconnects', async () => {
+  const host = createHost()
+  const pending =
+    Promise.withResolvers<Awaited<ReturnType<BoardHost['status']>>>()
+  jest
+    .mocked(host.cachedBoards)
+    .mockResolvedValue([{ id: '11111111', name: 'Cached board' }])
+  jest.mocked(host.status).mockReturnValueOnce(pending.promise)
+  const view = await createInstance(createContext(), host)
+  await flush()
+  expect(await boardTile(view, '11111111')).toMatchObject({
+    ariaLabel: 'Open Cached board',
+    disabled: false,
+  })
+  pending.reject(new Error('Offline'))
+  await flush()
+  expect(await boardTile(view, '11111111')).toBeDefined()
+
+  jest
+    .mocked(host.status)
+    .mockResolvedValue({ configured: true, connected: false })
+  await view.handleEvent?.({ name: 'board-check-account', type: 'click' })
+  await flush()
+  expect(await boardTile(view, '11111111')).toBeUndefined()
+  expect(JSON.stringify(await view.render())).toContain('Authorize Trello')
+  view.dispose?.()
+})
+
 test('restores the board from its URL hash before saved view state', async () => {
   const host = createHost()
   jest.mocked(host.read).mockResolvedValue(['5k8NLHLh', '12345678'])
@@ -1053,7 +1087,6 @@ test('empty discovery disables selection and can be refreshed', async () => {
   const host = createHost()
   jest.mocked(host.boards).mockResolvedValueOnce([])
   const view = await createInstance(createContext(), host)
-  await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
   await flush()
   expect(JSON.stringify(await view.render())).toContain('No open boards found')
   expect(await boardTile(view, '5k8NLHLh')).toBeUndefined()
@@ -1068,7 +1101,6 @@ test('failed discovery retries the board list instead of loading an empty ID', a
   const host = createHost()
   jest.mocked(host.boards).mockRejectedValueOnce(new Error('offline'))
   const view = await createInstance(createContext(), host)
-  await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
   await flush()
   expect(JSON.stringify(await view.render())).toContain(
     'Unable to connect Trello',
@@ -1090,7 +1122,6 @@ test.each(['navigate', 'disconnect', 'dispose'])(
       Promise.withResolvers<readonly { id: string; name: string }[]>()
     jest.mocked(host.boards).mockReturnValueOnce(pending.promise)
     const view = await createInstance(createContext(), host)
-    await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
     await flush()
     expect(JSON.stringify(await view.render())).toContain(
       'Loading your Trello boards',

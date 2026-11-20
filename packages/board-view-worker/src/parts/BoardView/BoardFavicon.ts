@@ -1,4 +1,4 @@
-const imageContentTypePattern = /^image\/(?:png|jpeg|webp|avif|gif)$/u
+import { loadBackgroundImage } from './LoadBackgroundImage.ts'
 
 const escapeXml = (value: string): string =>
   value
@@ -14,43 +14,6 @@ export interface FaviconBackground {
   readonly topColor?: string | undefined
 }
 
-const loadImage = async (
-  url: string,
-  signal: Readonly<AbortSignal>,
-  request: typeof fetch,
-): Promise<string | undefined> => {
-  try {
-    const response = await request(url, {
-      credentials: 'omit',
-      redirect: 'error',
-      signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
-    })
-    const mime = response.headers.get('content-type')?.split(';', 1)[0]
-    if (!response.ok || !mime || !imageContentTypePattern.test(mime))
-      return undefined
-    const reader = response.body?.getReader()
-    if (!reader) return undefined
-    let binary = ''
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (binary.length + value.length > 1_000_000) {
-          await reader.cancel()
-          return undefined
-        }
-        for (const byte of value) binary += String.fromCodePoint(byte)
-      }
-    } finally {
-      reader.releaseLock()
-    }
-    return binary ? `data:${mime};base64,${btoa(binary)}` : undefined
-  } catch {
-    signal.throwIfAborted()
-    return undefined
-  }
-}
-
 // Trello's board icon uses a rounded background with two white list columns.
 // Embed photos so the favicon remains self-contained in SVG image mode.
 export const createBoardFavicon = async (
@@ -59,7 +22,9 @@ export const createBoardFavicon = async (
   request: typeof fetch = fetch,
 ): Promise<string> => {
   const { bottomColor, color, image, tiled, topColor } = background
-  const photo = image ? await loadImage(image, signal, request) : undefined
+  const photo = image
+    ? await loadBackgroundImage(image, signal, request)
+    : undefined
   const gradient = topColor && bottomColor
   const fill = gradient ? 'url(#gradient)' : escapeXml(color || '#0055cc')
   const rounded = 'M19 0H45Q64 0 64 19V45Q64 64 45 64H19Q0 64 0 45V19Q0 0 19 0Z'

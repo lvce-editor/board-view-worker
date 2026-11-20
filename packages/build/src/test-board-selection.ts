@@ -15,6 +15,9 @@ export const testBoardSelection = async (
     '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/previews/eeeeeeeeeeeeeeeeeeeeeeee/download/image.png'
   const description = `# Card notes\n\nA **detailed description** from Trello.\n\n![Design diagram](https://trello.com${previewPath})`
   const releaseDetails = Promise.withResolvers<void>()
+  const releasePhoto = Promise.withResolvers<void>()
+  const releaseRevalidation = Promise.withResolvers<void>()
+  let holdRevalidation = false
   const releaseImage = Promise.withResolvers<void>()
   let detailLoads = 0
   let imageLoads = 0
@@ -135,8 +138,9 @@ export const testBoardSelection = async (
   })
   await context.route(
     'https://trello-backgrounds.s3.amazonaws.com/**',
-    (route) =>
-      route.fulfill({
+    async (route) => {
+      await releasePhoto.promise
+      await route.fulfill({
         body: Buffer.from(
           'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nmL8AAAAASUVORK5CYII=',
           'base64',
@@ -145,7 +149,8 @@ export const testBoardSelection = async (
           'Access-Control-Allow-Origin': '*',
           'Content-Type': 'image/png',
         },
-      }),
+      })
+    },
   )
   await context.route('https://api.trello.com/**', async (route) => {
     const request = route.request()
@@ -180,6 +185,7 @@ export const testBoardSelection = async (
     }
     if (url.pathname === '/1/members/me/boards') {
       discoveryLoads.push(`${url.pathname}${url.search}`)
+      if (holdRevalidation) await releaseRevalidation.promise
       await route.fulfill({
         headers: { 'Access-Control-Allow-Origin': '*' },
         json: empty
@@ -192,7 +198,7 @@ export const testBoardSelection = async (
               },
               {
                 id: '22222222',
-                name: 'Engineering',
+                name: holdRevalidation ? 'Engineering updated' : 'Engineering',
                 prefs: {
                   backgroundImage:
                     'https://trello-backgrounds.s3.amazonaws.com/engineering.jpg',
@@ -281,6 +287,7 @@ export const testBoardSelection = async (
         'settings',
         JSON.stringify({
           'chat2.backendUrl': backendUrl,
+          'chat2.connectedBoardIds': ['22222222'],
           'chat2.useMockBackend': false,
           'layout.backendUrl': backendUrl,
         }),
@@ -354,10 +361,25 @@ export const testBoardSelection = async (
     }
     await page.keyboard.press('Control+Shift+P')
     await page.getByRole('combobox').fill('>Open Board Layout')
-    await page
-      .getByRole('option', { exact: true, name: 'View: Open Board Layout' })
-      .click()
+    await Promise.all([
+      page.waitForRequest(
+        'https://trello-backgrounds.s3.amazonaws.com/engineering.jpg',
+      ),
+      page
+        .getByRole('option', { exact: true, name: 'View: Open Board Layout' })
+        .click(),
+    ])
     const tiles = page.locator('.BoardTile')
+    await page
+      .getByRole('status')
+      .filter({ hasText: 'Loading your Trello boards' })
+      .waitFor()
+    assert.equal(await tiles.count(), 0)
+    assert.equal(
+      await page.getByRole('searchbox', { name: 'Search boards' }).count(),
+      0,
+    )
+    releasePhoto.resolve()
     try {
       await page.getByRole('button', { name: 'Open Engineering' }).waitFor()
     } catch (error) {
@@ -385,9 +407,13 @@ export const testBoardSelection = async (
         .evaluate((element) => element.style.backgroundColor),
       'rgb(34, 160, 107)',
     )
-    assert.equal(
-      await page.locator('.BoardTileImage').getAttribute('src'),
-      'https://trello-backgrounds.s3.amazonaws.com/engineering.jpg',
+    const tilePhoto = page.locator('.BoardTileImage')
+    assert.match(
+      (await tilePhoto.getAttribute('src')) || '',
+      /^data:image\/png;base64,/u,
+    )
+    await tilePhoto.evaluate((element) =>
+      (element as HTMLImageElement).decode(),
     )
     assert.equal(
       await page
@@ -797,11 +823,12 @@ export const testBoardSelection = async (
         'N',
       )
       assert.equal(await title.inputValue(), 'N')
+      await title.blur()
       await openBoardOptions()
-      assert.equal(await title.inputValue(), 'N')
       await page
         .getByRole('button', { ...boardOptionsButton, expanded: true })
-        .click()
+        .waitFor()
+      assert.equal(await title.inputValue(), 'N')
       await page
         .locator('.BoardCardComposer')
         .getByRole('button', {
@@ -1086,12 +1113,43 @@ export const testBoardSelection = async (
     process.stdout.write(
       'Card URLs: click, search, direct navigation, reload and dismissal: pass\n',
     )
+
+    holdRevalidation = true
+    await Promise.all([
+      page.waitForRequest(
+        (request) =>
+          new URL(request.url()).pathname === '/1/members/me/boards' &&
+          request.method() === 'GET',
+      ),
+      page.goto(new URL('board/', baseUrl).href),
+    ])
+    await page
+      .getByRole('button', { name: 'Open Engineering', exact: true })
+      .waitFor()
+    await tilePhoto.evaluate((element) =>
+      (element as HTMLImageElement).decode(),
+    )
+    releaseRevalidation.resolve()
+    await page
+      .getByRole('button', { name: 'Open Engineering updated', exact: true })
+      .waitFor()
+    assert.equal(
+      await page
+        .getByRole('button', { name: 'Open Engineering', exact: true })
+        .count(),
+      0,
+    )
+    process.stdout.write(
+      'Board picker restores photos before revalidation and applies updated Trello boards: pass\n',
+    )
     process.stdout.write(
       'standalone Trello discovery, board favicons, clickable board tiles, empty state and retry: pass\n',
     )
   } finally {
     releaseDetails.resolve()
     releaseImage.resolve()
+    releasePhoto.resolve()
+    releaseRevalidation.resolve()
     await context.close()
   }
 }

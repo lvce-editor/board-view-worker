@@ -21,6 +21,7 @@ import { renderDescriptionMarkdown } from './DescriptionMarkdownWorker.ts'
 import { render, type BoardState } from './Render.ts'
 import {
   boardIdPattern,
+  isBoardPickerAccessError,
   trelloClient,
   parseBoardId,
   TrelloError,
@@ -38,6 +39,7 @@ const isCardTitleBlur = (event: Readonly<ViewEvent>): boolean =>
 export interface BoardHost {
   readonly authorize: typeof trelloClient.authorize
   readonly boards: typeof trelloClient.boards
+  readonly cachedBoards: typeof trelloClient.cachedBoards
   readonly createCard: typeof trelloClient.createCard
   readonly createFavicon: typeof createBoardFavicon
   readonly execute: typeof executeCommand
@@ -91,6 +93,7 @@ const isReauthorizationRequired = (error: unknown): boolean =>
 const defaultHost: BoardHost = {
   authorize: trelloClient.authorize,
   boards: trelloClient.boards,
+  cachedBoards: trelloClient.cachedBoards,
   createCard: trelloClient.createCard,
   createFavicon: createBoardFavicon,
   execute: executeCommand,
@@ -307,6 +310,7 @@ export const createInstance = async (
       authorizationUrl: undefined,
       authorizing: false,
       cardDraft: preserveDraft && !cardDraft?.saving ? cardDraft : undefined,
+      discoveringBoards: false,
       ...(detailsLoading && {
         detailsLoading: false,
         editingCard: undefined,
@@ -639,11 +643,10 @@ export const createInstance = async (
               message: 'Unable to connect Trello. Try again.',
             },
       loading: false,
-      ...(error instanceof TrelloError &&
-        error.details.code === 'TRELLO_CONNECTION_REQUIRED' && {
-          accountConnected: false,
-          boards: [],
-        }),
+      ...(isBoardPickerAccessError(error) && {
+        accountConnected: false,
+        boards: [],
+      }),
     }
   }
   const loadBoards = async (
@@ -658,51 +661,80 @@ export const createInstance = async (
       ...state,
       boardId: boards.some((board) => board.id === boardId) ? boardId : '',
       boards,
+      discoveringBoards: false,
       loading: false,
+    }
+  }
+  const restoreCachedBoards = async (
+    signal: Readonly<AbortSignal>,
+  ): Promise<void> => {
+    const boards = await host.cachedBoards(signal)
+    if (signal.aborted || !boards) return
+    state = {
+      ...state,
+      accountConnected: true,
+      boards,
+      loading: false,
+      providerSelected: true,
+    }
+    await notify()
+  }
+  const showDisconnectedAccount = (
+    configured: boolean,
+    providerSelected: boolean,
+  ): void => {
+    state = {
+      ...state,
+      accountConnected: false,
+      boards: [],
+      error: configured
+        ? undefined
+        : {
+            code: 'TRELLO_NOT_CONFIGURED',
+            message:
+              'The server administrator needs to configure Trello OAuth.',
+          },
+      loading: false,
+      providerSelected,
     }
   }
   const checkAccount = async (automatic = false): Promise<void> => {
     cancel()
-    const { providerSelected } = state
+    const { boards, providerSelected } = state
     const requestGeneration = generation
     controller = new AbortController()
     const { signal } = controller
     state = {
       ...state,
-      boards: [],
+      discoveringBoards: true,
       error: undefined,
-      loading: true,
+      loading: boards.length === 0,
     }
     try {
+      if (automatic) await restoreCachedBoards(signal)
+      if (disposed || generation !== requestGeneration) return
       const result = await host.status(
         AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
       )
       if (disposed || generation !== requestGeneration) return
-      state = {
-        ...state,
-        accountConnected: result.connected,
-        loading: false,
-        providerSelected: result.connected || (!automatic && providerSelected),
-      }
-      if (result.connected) {
-        state = { ...state, loading: true }
-        await notify()
+      if (result.connected && result.configured) {
+        state = { ...state, accountConnected: true, providerSelected: true }
         await loadBoards(signal, requestGeneration)
+        if (disposed || generation !== requestGeneration) return
+      } else {
+        showDisconnectedAccount(
+          result.configured,
+          !automatic && providerSelected,
+        )
       }
-      if (!result.configured)
-        state = {
-          ...state,
-          error: {
-            code: 'TRELLO_NOT_CONFIGURED',
-            message:
-              'The server administrator needs to configure Trello OAuth.',
-          },
-        }
     } catch (error) {
       if (disposed || generation !== requestGeneration) return
       connectionError(error)
-      if (automatic) state = { ...state, providerSelected: false }
+      const { accountConnected } = state
+      if (automatic && !accountConnected)
+        state = { ...state, providerSelected: false }
     }
+    state = { ...state, discoveringBoards: false }
     await notify()
   }
   const waitForAuthorization = async (
@@ -755,6 +787,7 @@ export const createInstance = async (
         accountConnected: true,
         authorizationUrl: undefined,
         authorizing: false,
+        discoveringBoards: !reconnectCard,
         loading: !reconnectCard,
       }
       if (reconnectCard && cardDraft) {
