@@ -109,7 +109,7 @@ const defaultHost: BoardHost = {
   write: setPreference,
 }
 
-const getBoardHashFromHost = async (host: BoardHost): Promise<string> => {
+const getHrefFromHost = async (host: BoardHost): Promise<string> => {
   try {
     const href = await host.execute('Layout.getHref')
     return typeof href === 'string' ? href : ''
@@ -120,13 +120,14 @@ const getBoardHashFromHost = async (host: BoardHost): Promise<string> => {
 
 const setBoardHash = async (
   host: BoardHost,
-  boardId: string,
+  hash: string,
+  isCurrent?: () => boolean,
 ): Promise<void> => {
   try {
-    const href = await getBoardHashFromHost(host)
+    const href = await getHrefFromHost(host)
     const url = getUrl(href)
-    if (!url || !isBoardPath(url.pathname)) return
-    await host.execute('Layout.setHash', boardId ? getBoardHash(boardId) : '')
+    if (!url || !isBoardPath(url.pathname) || isCurrent?.() === false) return
+    await host.execute('Layout.setHash', hash)
   } catch {
     // Older editor builds do not expose URL commands.
   }
@@ -155,12 +156,15 @@ export const createInstance = async (
     // The connection form remains usable when settings cannot be read.
   }
   const savedState = context?.state
-  const href = await getBoardHashFromHost(host)
+  const href = await getHrefFromHost(host)
   const boardHash = parseBoardHash(href)
   const urlBoardId =
-    boardHash.type === 'board' && boardIdPattern.test(boardHash.id)
+    (boardHash.type === 'board' || boardHash.type === 'card') &&
+    boardIdPattern.test(boardHash.id)
       ? boardHash.id
       : ''
+  const urlCardId =
+    urlBoardId && boardHash.type === 'card' ? boardHash.cardId : undefined
   const savedId =
     typeof savedState === 'object' &&
     savedState !== null &&
@@ -186,6 +190,7 @@ export const createInstance = async (
   }
   let generation = 0
   let controller: AbortController | undefined
+  let detailsController: AbortController | undefined
   let faviconController: AbortController | undefined
   let searchController: AbortController | undefined
   let searchTimer: ReturnType<typeof setTimeout> | undefined
@@ -265,7 +270,7 @@ export const createInstance = async (
     await notify()
     const preview = await prepareDescription(
       text,
-      controller?.signal ?? new AbortController().signal,
+      detailsController?.signal ?? new AbortController().signal,
     )
     const {
       editDesc: currentEditDesc,
@@ -294,6 +299,7 @@ export const createInstance = async (
     const { cardDraft, detailsLoading } = state
     generation++
     controller?.abort()
+    detailsController?.abort()
     faviconController?.abort()
     moveController?.abort()
     state = {
@@ -309,13 +315,24 @@ export const createInstance = async (
       savingCard: false,
     }
   }
-  const closeEditor = (restoreFocus = true): void => {
+  const syncBoardHash = (): Promise<void> => {
+    const { boardId, editingCard } = state
+    const cardId = editingCard?.id
+    return setBoardHash(host, getBoardHash(boardId, cardId), () => {
+      const { boardId: currentBoardId, editingCard: currentCard } = state
+      return (
+        !disposed && currentBoardId === boardId && currentCard?.id === cardId
+      )
+    })
+  }
+  const closeEditor = (): void => {
     const { editingCard } = state
-    if (restoreFocus && editingCard) {
+    if (editingCard) {
       focusCardId = editingCard.id
       focusRestore = !focusRestore
     }
     state = { ...state, editError: undefined, editingCard: undefined }
+    if (editingCard) void syncBoardHash()
   }
   const refreshFavicon = (
     id: string,
@@ -356,7 +373,7 @@ export const createInstance = async (
           faviconController = undefined
       })
   }
-  const connect = async (): Promise<void> => {
+  const connect = async (cardId?: string): Promise<void> => {
     const { board } = state
     cancel(Boolean(board))
     const requestGeneration = generation
@@ -371,7 +388,13 @@ export const createInstance = async (
       const board = await host.load(boardId, signal)
       if (disposed || requestGeneration !== generation) return
       const id = parseBoardId(boardId)
-      await setBoardHash(host, id)
+      const card = board.cards.find((item) => item.id === cardId)
+      await setBoardHash(
+        host,
+        getBoardHash(id, card?.id),
+        () => !disposed && requestGeneration === generation,
+      )
+      if (disposed || requestGeneration !== generation) return
       host.session.set(id, { board })
       const ids = [...new Set([...connectedIds, id])]
       state = {
@@ -382,6 +405,7 @@ export const createInstance = async (
         connectedIds: ids,
         loading: false,
       }
+      if (card) showCard(card)
       await notify()
       void host
         .loadCovers(id, signal)
@@ -947,18 +971,17 @@ export const createInstance = async (
   const loadCardDetails = async (): Promise<void> => {
     const { editingCard, savingCard } = state
     if (!editingCard || savingCard) return
-    controller?.abort()
-    controller = new AbortController()
-    const { signal } = controller
-    const requestGeneration = ++generation
+    detailsController?.abort()
+    detailsController = new AbortController()
+    const { signal } = detailsController
     descriptionGeneration++
     pendingDescriptionKey = undefined
     state = { ...state, detailsError: undefined, detailsLoading: true }
     try {
       const details = await host.loadCard(editingCard.id, signal)
-      if (disposed || signal.aborted || generation !== requestGeneration) return
+      if (disposed || signal.aborted) return
       const preview = await prepareDescription(details.desc, signal)
-      if (disposed || signal.aborted || generation !== requestGeneration) return
+      if (disposed || signal.aborted) return
       state = {
         ...state,
         descriptionError: undefined,
@@ -972,7 +995,7 @@ export const createInstance = async (
         ...preview,
       }
     } catch {
-      if (disposed || signal.aborted || generation !== requestGeneration) return
+      if (disposed || signal.aborted) return
       state = {
         ...state,
         detailsError: 'Unable to load card details. Try again.',
@@ -982,15 +1005,7 @@ export const createInstance = async (
     focusEditor = !focusEditor
     await notify()
   }
-  const openCard = (name: string | undefined): void => {
-    if (!name?.startsWith('board-card:')) return
-    const { board, savingCard } = state
-    if (savingCard) return
-    const card = board?.cards.find(
-      (item) => item.id === name.slice('board-card:'.length),
-    )
-    if (!card) return
-    cancel()
+  const showCard = (card: TrelloCard): void => {
     state = {
       ...state,
       descriptionError: undefined,
@@ -1007,6 +1022,14 @@ export const createInstance = async (
       savingCard: false,
     }
     void loadCardDetails()
+  }
+  const openCard = (id: string): void => {
+    const { board, savingCard } = state
+    const card = board?.cards.find((item) => item.id === id)
+    if (!card || savingCard) return
+    cancel()
+    showCard(card)
+    void syncBoardHash()
   }
   const changeBoard = async (name: string | undefined): Promise<void> => {
     if (name !== 'board-change' && !name?.startsWith('board-select:')) return
@@ -1030,7 +1053,7 @@ export const createInstance = async (
       searchQuery: '',
     }
     const { boardId } = state
-    await setBoardHash(host, boardId)
+    await setBoardHash(host, boardId ? getBoardHash(boardId) : '')
     await restoreConnection(boardId)
     if (boardId && !host.session.get(boardId)) void connect()
   }
@@ -1064,8 +1087,11 @@ export const createInstance = async (
       host.session.set(result.boardId, { board })
       state = { ...state, board, loading: false }
       await syncTab(board.name, board.faviconUrl)
+      if (disposed || requestGeneration !== generation) return
       refreshFavicon(result.boardId, board, requestGeneration)
-      openCard(`board-card:${id}`)
+      const card = board.cards.find((item) => item.id === id)
+      if (card) showCard(card)
+      await syncBoardHash()
       await notify()
     } catch (error) {
       if (disposed || requestGeneration !== generation) return
@@ -1120,7 +1146,7 @@ export const createInstance = async (
       return
     }
     if (event.name?.startsWith('board-card:')) {
-      openCard(event.name)
+      openCard(event.name.slice('board-card:'.length))
       return
     }
     if (event.name?.startsWith('board-search-card:')) {
@@ -1312,11 +1338,19 @@ export const createInstance = async (
       return { boardId }
     },
   }
-  if (initialBoard) refreshFavicon(initialId, initialBoard, generation)
-  if (!initialBoard) {
-    if (urlBoardId) void connect()
-    else void checkAccount(true)
+  const restoreInitialBoard = (): void => {
+    if (!initialBoard) {
+      if (urlBoardId) void connect(urlCardId)
+      else void checkAccount(true)
+      return
+    }
+    refreshFavicon(initialId, initialBoard, generation)
+    if (!urlCardId) return
+    const card = initialBoard.cards.find((item) => item.id === urlCardId)
+    if (card) showCard(card)
+    else void syncBoardHash()
   }
+  restoreInitialBoard()
   return instance
 }
 
