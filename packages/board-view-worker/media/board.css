@@ -49,6 +49,36 @@
   font-size: 20px;
   overflow-wrap: anywhere;
 }
+.BoardBreadcrumb {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: #ffffff;
+}
+.BoardBreadcrumbButton {
+  flex: none;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: inherit;
+  background: color-mix(in srgb, var(--BoardForeground) 72%, transparent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.BoardBreadcrumbButton:hover {
+  text-decoration-thickness: 2px;
+}
+.BoardBreadcrumbButton:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+.BoardBreadcrumbButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .BoardSearch {
   position: relative;
   min-width: 0;
@@ -801,6 +831,7 @@
     grid-template-columns: minmax(0, 1fr) auto;
     padding-inline: 16px;
   }
+  .BoardBreadcrumb,
   .BoardTitle {
     grid-column: 1 / -1;
   }
