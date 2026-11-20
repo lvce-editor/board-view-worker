@@ -916,6 +916,33 @@ export const testBoardSelection = async (
       ),
       'rgb(255, 88, 176)',
     )
+    await page.getByRole('button', { name: 'More board options' }).focus()
+    await page.keyboard.press('Shift+Tab')
+    assert.ok(
+      await boardSearch.evaluate(
+        (element) =>
+          globalThis.getComputedStyle(element).outlineStyle === 'solid',
+      ),
+      'The toolbar search is reachable by keyboard with visible focus',
+    )
+    await boardSearch.fill('cover')
+    await page
+      .getByRole('button', { name: 'Card · Card with cover — Engineering' })
+      .waitFor()
+    const searchResults = page.locator('.BoardSearchResults')
+    const toolbar = page.locator('.BoardToolbar')
+    for (const width of [390, 601, 1280]) {
+      await page.setViewportSize({ height: 844, width })
+      const bounds = await searchResults.boundingBox()
+      const toolbarBounds = await toolbar.boundingBox()
+      assert.ok(
+        bounds &&
+          toolbarBounds &&
+          bounds.x >= toolbarBounds.x &&
+          bounds.x + bounds.width <= toolbarBounds.x + toolbarBounds.width,
+        `Search results fit in a ${width}px viewport`,
+      )
+    }
     const gradientIcon = await readBoardIcon()
     assert.ok(gradientIcon.includes('stop-color="#a82be0"'))
     assert.ok(gradientIcon.includes('stop-color="#ff58b0"'))
