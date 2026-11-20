@@ -345,8 +345,11 @@ test('supports status, launching consent, and disconnect without Trello credenti
     configured: true,
     connected: true,
   })
-  expect(await client.authorize(signal)).toBe(
+  expect(await client.authorize(signal, 'board')).toBe(
     'https://backend.test/auth/trello/connect?ticket=one-use',
+  )
+  expect(request.mock.calls[1]?.[1]?.body).toBe(
+    JSON.stringify({ returnTarget: 'board' }),
   )
   await client.disconnect(signal)
   expect(request.mock.calls[2]?.[1]?.method).toBe('POST')

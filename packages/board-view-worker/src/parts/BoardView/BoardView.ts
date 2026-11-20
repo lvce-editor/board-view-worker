@@ -29,6 +29,7 @@ import {
   type TrelloBoard,
   type TrelloCard,
   type TrelloList,
+  type TrelloReturnTarget,
 } from './Trello.ts'
 
 export const viewId = 'chat2.views.board'
@@ -138,6 +139,19 @@ const getHrefFromHost = async (host: BoardHost): Promise<string> => {
   } catch {
     return ''
   }
+}
+
+const getTrelloReturnTarget = (
+  href: string,
+): TrelloReturnTarget | undefined => {
+  const url = getUrl(href)
+  if (!url) return undefined
+  if (url.protocol === 'lvce:' || url.protocol === 'lvce-oss:') return 'desktop'
+  if (url.origin !== 'https://lvce-editor.github.io') return undefined
+  const [, app] = url.pathname.split('/')
+  if (app === 'board-view-worker') return 'board'
+  if (app === 'lvce-editor') return 'editor'
+  return undefined
 }
 
 const setBoardHash = async (
@@ -829,6 +843,7 @@ export const createInstance = async (
   }
   const waitForAuthorization = async (
     signal: Readonly<AbortSignal>,
+    returnTarget: TrelloReturnTarget | undefined,
   ): Promise<void> => {
     while (!signal.aborted) {
       await new Promise<void>((resolve) => {
@@ -843,7 +858,16 @@ export const createInstance = async (
       signal.throwIfAborted()
       const { connected } = await host.status(signal)
       signal.throwIfAborted()
-      if (connected) return
+      if (connected) {
+        if (returnTarget === 'desktop') {
+          try {
+            await host.execute('Layout.focusWindow')
+          } catch {
+            // Older editor builds can still finish connecting.
+          }
+        }
+        return
+      }
     }
     signal.throwIfAborted()
   }
@@ -866,11 +890,13 @@ export const createInstance = async (
     ])
     state = { ...state, authorizing: true, error: undefined }
     try {
-      const url = await host.authorize(signal)
+      const returnTarget = getTrelloReturnTarget(await getHrefFromHost(host))
+      signal.throwIfAborted()
+      const url = await host.authorize(signal, returnTarget)
       if (disposed || generation !== requestGeneration) return
       state = { ...state, authorizationUrl: url }
       await notify()
-      await waitForAuthorization(signal)
+      await waitForAuthorization(signal, returnTarget)
       if (disposed || generation !== requestGeneration) return
       state = {
         ...state,

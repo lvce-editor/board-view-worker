@@ -347,6 +347,8 @@ interface TrelloStatus {
   readonly connected: boolean
 }
 
+export type TrelloReturnTarget = 'board' | 'desktop' | 'editor'
+
 const boardPickerCache = 'builtin.board-view.picker-v1'
 const pickerCredentialHeader = 'X-Board-Picker-Credential'
 const pickerImagePattern =
@@ -402,7 +404,10 @@ export interface TrelloClient {
     text: string,
     signal: Readonly<AbortSignal>,
   ) => Promise<CardActivity>
-  readonly authorize: (signal: Readonly<AbortSignal>) => Promise<string>
+  readonly authorize: (
+    signal: Readonly<AbortSignal>,
+    returnTarget?: TrelloReturnTarget,
+  ) => Promise<string>
   readonly boards: (
     signal: Readonly<AbortSignal>,
   ) => Promise<readonly TrelloBoardSummary[]>
@@ -622,8 +627,16 @@ export const createTrelloClient = (
     if (!response.ok) throw new TrelloError(mapError(response.status))
     return response.json() as Promise<unknown>
   }
-  const authorize = async (signal: Readonly<AbortSignal>): Promise<string> => {
-    const { baseUrl, data } = await call('connect', signal, 'POST')
+  const authorize = async (
+    signal: Readonly<AbortSignal>,
+    returnTarget?: TrelloReturnTarget,
+  ): Promise<string> => {
+    const { baseUrl, data } = await call(
+      'connect',
+      signal,
+      'POST',
+      returnTarget && { returnTarget },
+    )
     const url =
       isRecord(data) && typeof data.url === 'string'
         ? URL.parse(data.url)
