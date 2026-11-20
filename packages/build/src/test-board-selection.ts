@@ -11,9 +11,13 @@ export const testBoardSelection = async (
 ): Promise<void> => {
   const context = await browser.newContext()
   const backend = 'https://trello-selection.test'
-  await context.route('https://example.com/description.png', (route) =>
-    route.fulfill({ body: '', contentType: 'image/png' }),
-  )
+  const previewPath =
+    '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/previews/eeeeeeeeeeeeeeeeeeeeeeee/download/image.png'
+  const description = `# Card notes\n\nA **detailed description** from Trello.\n\n![Design diagram](https://trello.com${previewPath})`
+  const releaseDetails = Promise.withResolvers<void>()
+  const releaseImage = Promise.withResolvers<void>()
+  let detailLoads = 0
+  let imageLoads = 0
   let empty = false
   let fail = false
   const discoveryLoads: string[] = []
@@ -178,7 +182,22 @@ export const testBoardSelection = async (
       })
       return
     }
+    if (url.pathname === previewPath) {
+      imageLoads++
+      await releaseImage.promise
+      await route.fulfill({
+        body: Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAFElEQVR4nGOUKn7BwMDAxMDAgKAAGzUBe6nlFkgAAAAASUVORK5CYII=',
+          'base64',
+        ),
+        contentType: 'image/png',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+      })
+      return
+    }
     if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa') {
+      detailLoads++
+      await releaseDetails.promise
       await route.fulfill({
         headers: { 'Access-Control-Allow-Origin': '*' },
         json: {
@@ -199,7 +218,7 @@ export const testBoardSelection = async (
           attachments: [
             { name: 'design.png', url: 'https://example.com/design.png' },
           ],
-          desc: '# Card notes\n\nA **detailed description** from Trello.\n\n![Design diagram](https://example.com/description.png)',
+          desc: description,
         },
       })
       return
@@ -511,18 +530,49 @@ export const testBoardSelection = async (
       '1',
     )
     assert.equal(await page.locator('.BoardCardBadgeIcon').count(), 2)
-    await page
-      .getByRole('button', { exact: false, name: 'Card with cover' })
-      .click()
+    await Promise.all([
+      page.waitForRequest(
+        (request) =>
+          new URL(request.url()).pathname ===
+          '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+      page
+        .getByRole('button', { exact: false, name: 'Card with cover' })
+        .click(),
+    ])
     const dialog = page.getByRole('dialog', { name: 'Edit Trello card' })
+    await page.getByText('Loading card details…', { exact: true }).waitFor()
+    const dialogBeforeDetails = await dialog.count()
+    const pendingImage = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === previewPath,
+    )
+    releaseDetails.resolve()
+    await pendingImage
+    const dialogBeforeImage = await dialog.count()
+    releaseImage.resolve()
+    assert.equal(dialogBeforeDetails, 0)
+    assert.equal(dialogBeforeImage, 0)
     await dialog
       .getByText('Please review the attached design.', { exact: true })
       .waitFor()
     await dialog.getByRole('heading', { name: 'Card notes' }).waitFor()
     await dialog.getByText('A detailed description', { exact: false }).waitFor()
+    const image = dialog.locator('.BoardDescriptionImage')
+    assert.match(
+      (await image.getAttribute('src')) || '',
+      /^data:image\/png;base64,/u,
+    )
     assert.equal(
-      await dialog.locator('.BoardDescriptionImage').getAttribute('src'),
-      'https://example.com/description.png',
+      await image.evaluate(async (element) => {
+        const img = element as HTMLImageElement
+        await img.decode()
+        return img.naturalWidth
+      }),
+      2,
+    )
+    assert.equal(
+      await image.evaluate((element) => element.getBoundingClientRect().height),
+      3,
     )
     assert.equal(await dialog.getByLabel('Status: Todo').textContent(), 'Todo')
     assert.equal(await dialog.locator('.BoardDescriptionMarkdown').count(), 1)
@@ -538,7 +588,7 @@ export const testBoardSelection = async (
       await dialog
         .getByRole('textbox', { name: 'Markdown source' })
         .inputValue(),
-      '# Card notes\n\nA **detailed description** from Trello.\n\n![Design diagram](https://example.com/description.png)',
+      description,
     )
     assert.deepEqual(moveRequests, [])
     await dialog.getByRole('button', { name: 'Preview' }).click()
@@ -603,6 +653,8 @@ export const testBoardSelection = async (
       () =>
         globalThis.document.activeElement?.getAttribute('role') === 'dialog',
     )
+    assert.equal(detailLoads, 1, 'Reopening reuses cached card details')
+    assert.equal(imageLoads, 1, 'Reopening reuses the cached Trello image')
     await page.keyboard.press('Escape')
     await dialog.waitFor({ state: 'detached' })
     const draggedCard = page.locator(
@@ -670,8 +722,21 @@ export const testBoardSelection = async (
     assert.deepEqual(moveRequests, [
       '/api/integrations/trello/cards/aaaaaaaaaaaaaaaaaaaaaaaa/list/cccccccccccccccccccccccc',
     ])
+    await page
+      .getByText('Loading…', { exact: true })
+      .waitFor({ state: 'detached' })
+    await draggedCard.click()
+    await dialog.getByLabel('Status: Doing').waitFor()
+    assert.equal(
+      detailLoads,
+      2,
+      'Moving a card invalidates its cached activity',
+    )
+    assert.equal(imageLoads, 1, 'Moving a card keeps its cached image')
+    await page.keyboard.press('Escape')
+    await dialog.waitFor({ state: 'detached' })
     process.stdout.write(
-      'Card details: status, attachments, comments/activity, desktop/mobile, dismissal and drag cancellation: pass\n',
+      'Card details: staged opening, image sizing, cache reuse and invalidation, responsive layout and dismissal: pass\n',
     )
     const title = page.getByRole('textbox', { exact: true, name: 'Card title' })
     for (const list of ['Todo', 'Doing', 'Todo']) {
@@ -858,6 +923,8 @@ export const testBoardSelection = async (
       'standalone Trello discovery, board favicons, clickable board tiles, empty state and retry: pass\n',
     )
   } finally {
+    releaseDetails.resolve()
+    releaseImage.resolve()
     await context.close()
   }
 }

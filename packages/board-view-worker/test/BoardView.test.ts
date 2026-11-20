@@ -59,6 +59,7 @@ const createHost = (): BoardHost => ({
     desc: id === 'new' ? '' : 'Details',
   })),
   loadCovers: jest.fn<BoardHost['loadCovers']>().mockResolvedValue([]),
+  loadDescriptionImages: async (markdown) => markdown,
   moveCard: jest.fn<BoardHost['moveCard']>().mockResolvedValue(undefined),
   read: jest.fn<BoardHost['read']>().mockResolvedValue([]),
   renderDescriptionMarkdown: jest
@@ -1315,6 +1316,42 @@ test('newly created cards can be edited without losing existing cards', async ()
   expect(
     host.session.get('5k8NLHLh')?.board.cards.map((card) => card.name),
   ).toEqual(['A task', 'Edited new task'])
+})
+
+test('the card dialog first renders with details and its prepared description', async () => {
+  const host = createHost()
+  const details =
+    Promise.withResolvers<Awaited<ReturnType<BoardHost['loadCard']>>>()
+  const preview =
+    Promise.withResolvers<
+      Awaited<ReturnType<BoardHost['renderDescriptionMarkdown']>>
+    >()
+  jest.mocked(host.loadCard).mockReturnValue(details.promise)
+  jest.mocked(host.renderDescriptionMarkdown).mockReturnValue(preview.promise)
+  const view = await openBoard(host)
+  await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
+  expect(JSON.stringify(await view.render())).not.toContain(
+    'BoardDialogOverlay',
+  )
+
+  details.resolve({
+    activities: [{ author: 'Board member', date: '', text: 'A comment' }],
+    attachments: [],
+    desc: 'Full description',
+  })
+  await flush()
+  expect(JSON.stringify(await view.render())).not.toContain(
+    'BoardDialogOverlay',
+  )
+
+  preview.resolve(renderDescriptionMarkdown('Full description'))
+  await flush()
+  const dom = JSON.stringify(await view.render())
+  expect(dom).toContain('BoardDialogOverlay')
+  expect(dom).toContain('Full description')
+  expect(dom).toContain('A comment')
+  expect(host.renderDescriptionMarkdown).toHaveBeenCalledTimes(1)
+  view.dispose?.()
 })
 
 test('failed detail loads can be retried and saving waits for complete details', async () => {
