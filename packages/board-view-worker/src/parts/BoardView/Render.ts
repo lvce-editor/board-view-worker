@@ -414,24 +414,15 @@ const renderBadges = (card: Readonly<TrelloCard>): readonly Dom.Node[] => {
   return badges.length > 0 ? [Dom.div('BoardCardBadges', badges)] : []
 }
 
-const detailEmptyText = (
-  loading: boolean | undefined,
-  error: string | undefined,
-): string => {
-  if (loading) return 'Loading attachments…'
-  return error ? 'Attachments unavailable' : 'No attachments'
-}
-
 const renderActivity = (state: BoardState): Dom.Node => {
-  const { details, detailsError, detailsLoading } = state
-  const emptyActivity =
-    !detailsLoading && !detailsError
-      ? [
-          Dom.div('BoardDetailEmpty', [
-            Dom.textNode('No comments or activity yet'),
-          ]),
-        ]
-      : []
+  const { details, detailsError } = state
+  const emptyActivity = detailsError
+    ? []
+    : [
+        Dom.div('BoardDetailEmpty', [
+          Dom.textNode('No comments or activity yet'),
+        ]),
+      ]
   return Dom.node(
     VirtualDomElements.Section,
     {
@@ -440,15 +431,6 @@ const renderActivity = (state: BoardState): Dom.Node => {
     },
     [
       Dom.heading(3, 'BoardDetailHeading', 'Comments and activity'),
-      ...(detailsLoading
-        ? [
-            Dom.node(
-              VirtualDomElements.Div,
-              { className: 'BoardDetailEmpty', role: 'status' },
-              [Dom.textNode('Loading card details…')],
-            ),
-          ]
-        : []),
       ...(detailsError
         ? [
             Dom.node(
@@ -488,10 +470,15 @@ const renderDescriptionPreview = (state: BoardState): Dom.Node => {
   const {
     descriptionError,
     descriptionRendering,
+    detailsError,
     editDesc,
     renderedDescription,
     renderedDescriptionText,
   } = state
+  if (detailsError)
+    return Dom.div('BoardDetailEmpty', [
+      Dom.textNode('Description unavailable'),
+    ])
   if (!editDesc)
     return Dom.div('BoardDetailEmpty', [Dom.textNode('No description')])
   if (renderedDescriptionText === editDesc && renderedDescription)
@@ -524,7 +511,18 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
     savingCard,
   } = state
   if (!editingCard) return undefined
-  const disabled = Boolean(savingCard || detailsLoading || detailsError)
+  if (detailsLoading)
+    return Dom.node(
+      VirtualDomElements.Div,
+      { className: 'BoardCardLoading', onKeyDown: 'handleDialogKeyDown' },
+      [
+        Dom.node(VirtualDomElements.Span, { role: 'status' }, [
+          Dom.textNode('Loading card details…'),
+        ]),
+        Dom.button('board-card-cancel', 'Cancel', 'BoardButton'),
+      ],
+    )
+  const disabled = Boolean(savingCard || detailsError)
   const status =
     board?.lists.find((list) => list.id === editingCard.idList)?.name ||
     'Unknown list'
@@ -555,7 +553,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
         Dom.div('BoardDialogBody', [
           Dom.form('board-card-edit', 'BoardDialogMain', [
             Dom.heading(2, 'BoardDialogTitle', 'Edit card'),
-            input('edit-card-name', 'Title', editName, Boolean(savingCard)),
+            input('edit-card-name', 'Title', editName, disabled),
             Dom.node(
               VirtualDomElements.Section,
               {
@@ -612,7 +610,9 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                   : [
                       Dom.div('BoardDetailEmpty', [
                         Dom.textNode(
-                          detailEmptyText(detailsLoading, detailsError),
+                          detailsError
+                            ? 'Attachments unavailable'
+                            : 'No attachments',
                         ),
                       ]),
                     ]),
@@ -865,6 +865,7 @@ export const render = (state: BoardState): Dom.Node => {
           onClick: 'handleClick',
           onDragEnd: 'handleBoardDragEnd',
           onDragStart: 'handleBoardDragStart',
+          onKeyDown: 'handleDialogKeyDown',
         },
         [
           ...(card.coverDataUrl

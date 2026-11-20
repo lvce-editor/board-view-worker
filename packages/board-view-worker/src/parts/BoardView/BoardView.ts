@@ -44,6 +44,7 @@ export interface BoardHost {
   readonly load: typeof trelloClient.load
   readonly loadCard: typeof trelloClient.loadCard
   readonly loadCovers: typeof trelloClient.loadCovers
+  readonly loadDescriptionImages: typeof trelloClient.loadDescriptionImages
   readonly moveCard: typeof trelloClient.moveCard
   readonly read: typeof getPreference
   readonly renderDescriptionMarkdown: (text: string) => Promise<Node>
@@ -96,6 +97,7 @@ const defaultHost: BoardHost = {
   load: trelloClient.load,
   loadCard: trelloClient.loadCard,
   loadCovers: trelloClient.loadCovers,
+  loadDescriptionImages: trelloClient.loadDescriptionImages,
   moveCard: trelloClient.moveCard,
   read: getPreference,
   renderDescriptionMarkdown,
@@ -218,6 +220,27 @@ export const createInstance = async (
   const notify = async (): Promise<void> => {
     if (!disposed) await context?.requestRerender()
   }
+  const prepareDescription = async (
+    text: string,
+    signal: Readonly<AbortSignal>,
+  ): Promise<
+    Pick<
+      BoardState,
+      'descriptionError' | 'renderedDescription' | 'renderedDescriptionText'
+    >
+  > => {
+    if (!text) return {}
+    try {
+      const markdown = await host.renderDescriptionMarkdown(text)
+      signal.throwIfAborted()
+      return {
+        renderedDescription: await host.loadDescriptionImages(markdown, signal),
+        renderedDescriptionText: text,
+      }
+    } catch {
+      return { descriptionError: 'Unable to render the description preview.' }
+    }
+  }
   const renderDescription = async (text: string): Promise<void> => {
     const {
       editDescription,
@@ -240,53 +263,25 @@ export const createInstance = async (
       renderedDescriptionText: undefined,
     }
     await notify()
-    try {
-      const renderedDescription = await host.renderDescriptionMarkdown(text)
-      const {
-        editDesc: currentEditDesc,
-        editDescription: isEditingDescription,
-        editingCard: currentEditingCard,
-      } = state
-      if (
-        disposed ||
-        requestGeneration !== descriptionGeneration ||
-        currentEditingCard?.id !== cardId ||
-        currentEditDesc !== text ||
-        isEditingDescription
-      ) {
-        if (pendingDescriptionKey === key) pendingDescriptionKey = undefined
-        return
-      }
-      pendingDescriptionKey = undefined
-      state = {
-        ...state,
-        descriptionRendering: false,
-        renderedDescription,
-        renderedDescriptionText: text,
-      }
-    } catch {
-      const {
-        editDesc: currentEditDesc,
-        editDescription: isEditingDescription,
-        editingCard: currentEditingCard,
-      } = state
-      if (
-        disposed ||
-        requestGeneration !== descriptionGeneration ||
-        currentEditingCard?.id !== cardId ||
-        currentEditDesc !== text ||
-        isEditingDescription
-      ) {
-        if (pendingDescriptionKey === key) pendingDescriptionKey = undefined
-        return
-      }
-      pendingDescriptionKey = undefined
-      state = {
-        ...state,
-        descriptionError: 'Unable to render the description preview.',
-        descriptionRendering: false,
-      }
-    }
+    const preview = await prepareDescription(
+      text,
+      controller?.signal ?? new AbortController().signal,
+    )
+    const {
+      editDesc: currentEditDesc,
+      editDescription: isEditingDescription,
+      editingCard: currentEditingCard,
+    } = state
+    if (requestGeneration !== descriptionGeneration) return
+    pendingDescriptionKey = undefined
+    if (
+      disposed ||
+      currentEditingCard?.id !== cardId ||
+      currentEditDesc !== text ||
+      isEditingDescription
+    )
+      return
+    state = { ...state, ...preview, descriptionRendering: false }
     await notify()
   }
   const clearDrag = async (): Promise<void> => {
@@ -296,6 +291,7 @@ export const createInstance = async (
     await notify()
   }
   const cancel = (): void => {
+    const { detailsLoading } = state
     generation++
     controller?.abort()
     faviconController?.abort()
@@ -305,6 +301,10 @@ export const createInstance = async (
       authorizationUrl: undefined,
       authorizing: false,
       cardDraft: undefined,
+      ...(detailsLoading && {
+        detailsLoading: false,
+        editingCard: undefined,
+      }),
       loading: false,
       savingCard: false,
     }
@@ -916,9 +916,13 @@ export const createInstance = async (
     controller = new AbortController()
     const { signal } = controller
     const requestGeneration = ++generation
+    descriptionGeneration++
+    pendingDescriptionKey = undefined
     state = { ...state, detailsError: undefined, detailsLoading: true }
     try {
       const details = await host.loadCard(editingCard.id, signal)
+      if (disposed || signal.aborted || generation !== requestGeneration) return
+      const preview = await prepareDescription(details.desc, signal)
       if (disposed || signal.aborted || generation !== requestGeneration) return
       state = {
         ...state,
@@ -930,8 +934,8 @@ export const createInstance = async (
         editDescription: false,
         renderedDescription: undefined,
         renderedDescriptionText: undefined,
+        ...preview,
       }
-      void renderDescription(details.desc)
     } catch {
       if (disposed || signal.aborted || generation !== requestGeneration) return
       state = {
@@ -940,18 +944,18 @@ export const createInstance = async (
         detailsLoading: false,
       }
     }
+    focusEditor = !focusEditor
     await notify()
   }
   const openCard = (name: string | undefined): void => {
     if (!name?.startsWith('board-card:')) return
-    const { board } = state
+    const { board, savingCard } = state
+    if (savingCard) return
     const card = board?.cards.find(
       (item) => item.id === name.slice('board-card:'.length),
     )
     if (!card) return
     cancel()
-    descriptionGeneration++
-    pendingDescriptionKey = undefined
     state = {
       ...state,
       descriptionError: undefined,
@@ -967,8 +971,6 @@ export const createInstance = async (
       renderedDescriptionText: undefined,
       savingCard: false,
     }
-    void renderDescription(card.desc || '')
-    focusEditor = !focusEditor
     void loadCardDetails()
   }
   const changeBoard = async (name: string | undefined): Promise<void> => {
@@ -1028,8 +1030,8 @@ export const createInstance = async (
       state = { ...state, board, loading: false }
       await syncTab(board.name, board.faviconUrl)
       refreshFavicon(result.boardId, board, requestGeneration)
-      await notify()
       openCard(`board-card:${id}`)
+      await notify()
     } catch (error) {
       if (disposed || requestGeneration !== generation) return
       state = {
@@ -1098,8 +1100,8 @@ export const createInstance = async (
     if (event.name === 'board-card-cancel') {
       const { savingCard } = state
       if (savingCard) return
-      cancel()
       closeEditor()
+      cancel()
       return
     }
     await changeBoard(event.name)
@@ -1228,14 +1230,14 @@ export const createInstance = async (
         return
       }
       if (key !== 'Escape' || !editingCard || savingCard) return
-      cancel()
       closeEditor()
+      cancel()
     },
     handleDialogOverlayClick(className: unknown): void {
       const { savingCard } = state
       if (className !== 'BoardDialogOverlay' || savingCard) return
-      cancel()
       closeEditor()
+      cancel()
     },
     async handleEvent(event: Readonly<ViewEvent>): Promise<void> {
       if (await handleSearchEvent(event)) return

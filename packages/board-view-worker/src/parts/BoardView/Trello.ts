@@ -1,11 +1,21 @@
 // cspell:words prefs
 
+import type { Node } from '../VirtualDom/VirtualDom.ts'
 import {
   resolveBackendConfiguration,
   type BackendConfiguration,
 } from '../BackendConfiguration/BackendConfiguration.ts'
 import { createBoardFavicon, type FaviconBackground } from './BoardFavicon.ts'
+import {
+  cacheRequestUrl,
+  cardDetailsCache,
+  cardImagesCache,
+  openCardCache,
+  readCardCache,
+  writeCardCache,
+} from './CardCache.ts'
 import { normalizeDetails, type CardDetails } from './CardDetails.ts'
+import { loadDescriptionImages } from './DescriptionImages.ts'
 
 export interface TrelloCard {
   readonly attachmentCount?: number
@@ -337,6 +347,10 @@ export interface TrelloClient {
   ) => Promise<
     readonly { readonly id: string; readonly coverDataUrl: string }[]
   >
+  readonly loadDescriptionImages: (
+    markdown: Node,
+    signal: Readonly<AbortSignal>,
+  ) => Promise<Node>
   readonly moveCard: (
     cardId: string,
     listId: string,
@@ -359,6 +373,18 @@ export const createTrelloClient = (
   configuration: () => Promise<BackendConfiguration> = resolveBackendConfiguration,
   request: typeof fetch = fetch,
 ): TrelloClient => {
+  let cacheRevision = 0
+  const invalidateCard = async (id: string): Promise<void> => {
+    cacheRevision++
+    try {
+      const cache = await openCardCache(cardDetailsCache)
+      await cache?.delete(`https://api.trello.com/1/cards/${id}`, {
+        ignoreSearch: true,
+      })
+    } catch {
+      // Cache Storage is best-effort.
+    }
+  }
   const call = async (
     path: string,
     signal: Readonly<AbortSignal>,
@@ -463,6 +489,15 @@ export const createTrelloClient = (
   }
   const disconnect = async (signal: Readonly<AbortSignal>): Promise<void> => {
     await call('disconnect', signal, 'POST')
+    cacheRevision++
+    try {
+      await Promise.all([
+        globalThis.caches?.delete(cardDetailsCache),
+        globalThis.caches?.delete(cardImagesCache),
+      ])
+    } catch {
+      // Entries are also scoped by the Trello credential.
+    }
   }
   const load = async (
     input: string,
@@ -533,17 +568,45 @@ export const createTrelloClient = (
   ): Promise<CardDetails> => {
     if (!cardIdPattern.test(id)) throw new TrelloError(boardError(404))
     try {
-      const data = await trelloRequest(
-        `cards/${id}?${new URLSearchParams({
-          actions: 'commentCard,createCard,updateCard:idList',
-          actions_limit: '100',
-          attachment_fields: 'name,url',
-          attachments: 'true',
-          fields: 'desc',
-        })}`,
-        signal,
-      )
-      return normalizeDetails(data)
+      const path = `cards/${id}?${new URLSearchParams({
+        actions: 'commentCard,createCard,updateCard:idList',
+        actions_limit: '100',
+        attachment_fields: 'name,url',
+        attachments: 'true',
+        fields: 'desc',
+      })}`
+      const revision = cacheRevision
+      const token = await getTrelloAccessToken(signal)
+      const cache = await openCardCache(cardDetailsCache)
+      const key = cache
+        ? await cacheRequestUrl(`https://api.trello.com/1/${path}`, token)
+        : undefined
+      const cached = await readCardCache(cache, key)
+      signal.throwIfAborted()
+      if (
+        cached &&
+        Number(cached.headers.get('X-Board-Cache-Until')) > Date.now()
+      ) {
+        try {
+          const details = normalizeDetails(await cached.json())
+          if (revision === cacheRevision) return details
+        } catch {
+          // Fetch again if the stored response is unreadable.
+        }
+      }
+      const data = await trelloRequest(path, signal, token)
+      const details = normalizeDetails(data)
+      if (key && !signal.aborted && revision === cacheRevision) {
+        const expires = String(Date.now() + 5 * 60_000)
+        await writeCardCache(
+          cache,
+          key,
+          Response.json(data, {
+            headers: { 'X-Board-Cache-Until': expires },
+          }),
+        )
+      }
+      return details
     } catch (error) {
       if (signal.aborted || error instanceof TrelloError) throw error
       throw new TrelloError({
@@ -604,6 +667,7 @@ export const createTrelloClient = (
           message: 'Trello returned an unreadable card. Refresh the board.',
         })
       }
+      await invalidateCard(id)
       return { ...updatedCard, desc: data.desc }
     } catch (error) {
       if (signal.aborted) throw error
@@ -770,6 +834,7 @@ export const createTrelloClient = (
       })
     }
     await call(`cards/${cardId}/list/${listId}`, signal, 'PUT')
+    await invalidateCard(cardId)
   }
   return {
     authorize,
@@ -779,6 +844,15 @@ export const createTrelloClient = (
     load,
     loadCard,
     loadCovers,
+    loadDescriptionImages(markdown, signal): Promise<Node> {
+      let token: Promise<string> | undefined
+      return loadDescriptionImages(
+        markdown,
+        () => (token ??= getTrelloAccessToken(signal)),
+        signal,
+        request,
+      )
+    },
     moveCard,
     search,
     status,
