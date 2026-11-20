@@ -9,8 +9,12 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    outputs:
+      release-id: ${{ steps.release.outputs.id }}
+      upload-url: ${{ steps.release.outputs.upload_url }}
     steps:
-      - uses: softprops/action-gh-release@v2
+      - id: release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: true
@@ -49,7 +53,7 @@ jobs:
             dist/
             extension.tar.br
   publish-github:
-    needs: build-release
+    needs: [create-prerelease, build-release]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -58,14 +62,17 @@ jobs:
         with:
           name: release
           path: release
-      - name: Name release archive
-        run: mv release/extension.tar.br board-view-worker-${{ github.ref_name }}.tar.br
       - name: Attach archive to draft prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-        run: gh release upload "$TAG" "board-view-worker-${TAG}.tar.br"
+          UPLOAD_URL: ${{ needs.create-prerelease.outputs.upload-url }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'Content-Type: application/octet-stream' \
+            --data-binary @release/extension.tar.br \
+            "${UPLOAD_URL%%\{*}?name=board-view-worker-${TAG}.tar.br"
   publish-npm:
     needs: [build-release, publish-github]
     runs-on: ubuntu-24.04
@@ -88,16 +95,15 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   finalize-release:
-    needs: [publish-github, publish-npm]
+    needs: [create-prerelease, publish-github, publish-npm]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Publish prerelease after all release jobs pass
+      - name: Publish draft as the latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          RELEASE_ID: ${{ needs.create-prerelease.outputs.release-id }}
         run: |
-          release_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .id)
-          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             -F draft=false -F prerelease=false -f make_latest=true
