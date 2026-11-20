@@ -15,6 +15,7 @@ export const testBoardSelection = async (
     '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/previews/eeeeeeeeeeeeeeeeeeeeeeee/download/image.png'
   const description = `# Card notes\n\nA **detailed description** from Trello.\n\n![Design diagram](https://trello.com${previewPath})`
   const releaseDetails = Promise.withResolvers<void>()
+  const releaseCardRefresh = Promise.withResolvers<void>()
   const releasePhoto = Promise.withResolvers<void>()
   const releaseRevalidation = Promise.withResolvers<void>()
   let holdRevalidation = false
@@ -231,14 +232,22 @@ export const testBoardSelection = async (
       return
     }
     if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa') {
-      detailLoads++
+      const load = ++detailLoads
+      if (load === 2) {
+        await releaseCardRefresh.promise
+      }
       await releaseDetails.promise
       await route.fulfill({
         headers: { 'Access-Control-Allow-Origin': '*' },
         json: {
           actions: [
             {
-              data: { text: 'Please review the attached design.' },
+              data: {
+                text:
+                  load === 1
+                    ? 'Please review the attached design.'
+                    : 'The design review is complete.',
+              },
               date: '2026-11-16T12:00:00.000Z',
               memberCreator: { fullName: 'Board member' },
               type: 'commentCard',
@@ -253,7 +262,10 @@ export const testBoardSelection = async (
           attachments: [
             { name: 'design.png', url: 'https://example.com/design.png' },
           ],
-          desc: description,
+          desc:
+            load === 1
+              ? description
+              : description.replace('Card notes', 'Updated card notes'),
         },
       })
       return
@@ -589,17 +601,23 @@ export const testBoardSelection = async (
       '1',
     )
     assert.equal(await page.locator('.BoardCardBadgeIcon').count(), 2)
+    const cardButton = page.getByRole('button', {
+      exact: false,
+      name: 'Card with cover',
+    })
+    const dialog = page.getByRole('dialog', { name: 'Edit Trello card' })
+    await cardButton.hover()
     await Promise.all([
       page.waitForRequest(
         (request) =>
           new URL(request.url()).pathname ===
-          '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa',
+            '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa' && request.method() === 'GET',
       ),
-      page
-        .getByRole('button', { exact: false, name: 'Card with cover' })
-        .click(),
+      page.mouse.down(),
     ])
-    const dialog = page.getByRole('dialog', { name: 'Edit Trello card' })
+    assert.equal(await dialog.count(), 0, 'Pointerdown only starts loading')
+    assert.equal(await page.getByText('Loading card details…').count(), 0)
+    await page.mouse.up()
     const cardHash = '#22222222/card/aaaaaaaaaaaaaaaaaaaaaaaa'
     await page.waitForURL((url) => url.hash === cardHash)
     const cardUrl = page.url()
@@ -708,16 +726,38 @@ export const testBoardSelection = async (
     await dialog.waitFor({ state: 'detached' })
     await page.waitForURL((url) => url.hash === '#22222222')
     await page.setViewportSize({ height: 720, width: 1280 })
-    await page
-      .getByRole('button', { exact: false, name: 'Card with cover' })
-      .click()
-    await dialog.waitFor()
+    // Keyboard activation also loads and revalidates cached details.
+    await cardButton.focus()
+    await Promise.all([
+      page.waitForRequest(
+        (request) =>
+          new URL(request.url()).pathname ===
+            '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa' && request.method() === 'GET',
+      ),
+      page.keyboard.press('Enter'),
+    ])
+    await dialog
+      .getByText('Please review the attached design.', { exact: true })
+      .waitFor()
+    await dialog.getByRole('heading', { name: 'Card notes' }).waitFor()
     await page.waitForFunction(
       () =>
         globalThis.document.activeElement?.getAttribute('role') === 'dialog',
     )
-    assert.equal(detailLoads, 1, 'Reopening reuses cached card details')
-    assert.equal(imageLoads, 1, 'Reopening reuses the cached Trello image')
+    const saveChanges = dialog.getByRole('button', { name: 'Save changes' })
+    assert.equal(await saveChanges.isDisabled(), true)
+    releaseCardRefresh.resolve()
+    await dialog
+      .getByText('The design review is complete.', { exact: true })
+      .waitFor()
+    await dialog.getByRole('heading', { name: 'Updated card notes' }).waitFor()
+    assert.equal(
+      await dialog.getByText('Please review the attached design.').count(),
+      0,
+    )
+    assert.equal(detailLoads, 2, 'Each opening makes one card details request')
+    assert.equal(await saveChanges.isEnabled(), true)
+    assert.equal(imageLoads, 1, 'Revalidation reuses the cached Trello image')
     await page.keyboard.press('Escape')
     await dialog.waitFor({ state: 'detached' })
     const draggedCard = page.locator(
@@ -788,18 +828,28 @@ export const testBoardSelection = async (
     await page
       .getByText('Loading…', { exact: true })
       .waitFor({ state: 'detached' })
+    assert.equal(
+      await page.evaluate(async () => {
+        const cache = await globalThis.caches.open(
+          'builtin.board-view.card-details-v1',
+        )
+        return (
+          await cache.matchAll(
+            'https://api.trello.com/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa',
+            { ignoreSearch: true },
+          )
+        ).length
+      }),
+      0,
+      'Moving invalidates cached activity',
+    )
     await draggedCard.click()
     await dialog.getByLabel('Status: Doing').waitFor()
-    assert.equal(
-      detailLoads,
-      2,
-      'Moving a card invalidates its cached activity',
-    )
     assert.equal(imageLoads, 1, 'Moving a card keeps its cached image')
     await page.keyboard.press('Escape')
     await dialog.waitFor({ state: 'detached' })
     process.stdout.write(
-      'Card details: staged opening, image sizing, cache reuse and invalidation, responsive layout and dismissal: pass\n',
+      'Card details: pointerdown, staged opening, stale-while-revalidate, cache invalidation, layout and dismissal: pass\n',
     )
     const title = page.getByRole('textbox', { exact: true, name: 'Card title' })
     for (const list of ['Todo', 'Doing', 'Todo']) {
@@ -1147,6 +1197,7 @@ export const testBoardSelection = async (
     )
   } finally {
     releaseDetails.resolve()
+    releaseCardRefresh.resolve()
     releaseImage.resolve()
     releasePhoto.resolve()
     releaseRevalidation.resolve()
