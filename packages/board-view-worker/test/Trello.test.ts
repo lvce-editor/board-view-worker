@@ -511,6 +511,31 @@ test('normalizes comment and attachment badges without rejecting older boards', 
   ])
 })
 
+test('archives the card through the scoped Trello connection', async () => {
+  const id = '0123456789abcdef01234567'
+  const request = jest
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ accessToken: 'trello-token' }))
+    .mockResolvedValueOnce(Response.json({ closed: false, id }))
+    .mockResolvedValueOnce(Response.json({ accessToken: 'trello-token' }))
+    .mockResolvedValueOnce(Response.json({ closed: true, id }))
+  const client = createTrelloClient(configuration, request)
+  const { signal } = new AbortController()
+  await expect(client.archiveCard(id, signal)).rejects.toMatchObject({
+    details: { code: 'TRELLO_INVALID_RESPONSE' },
+  })
+  await client.archiveCard(id, signal)
+  expect(request).toHaveBeenLastCalledWith(
+    `https://api.trello.com/1/cards/${id}?closed=true&fields=closed`,
+    expect.objectContaining({
+      credentials: 'omit',
+      headers: { Authorization: 'Bearer trello-token' },
+      method: 'PUT',
+      redirect: 'error',
+    }),
+  )
+})
+
 test('moves a card through the authenticated backend without exposing Trello tokens', async () => {
   const request = jest
     .fn<typeof fetch>()

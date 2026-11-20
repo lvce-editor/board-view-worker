@@ -34,6 +34,7 @@ const board: TrelloBoard = {
 }
 const createHost = (): BoardHost => ({
   addComment: jest.fn<BoardHost['addComment']>(),
+  archiveCard: jest.fn<BoardHost['archiveCard']>().mockResolvedValue(undefined),
   authorize: jest
     .fn<BoardHost['authorize']>()
     .mockResolvedValue(
@@ -85,6 +86,9 @@ const createHost = (): BoardHost => ({
       pos: 1,
     })),
   write: jest.fn<BoardHost['write']>().mockResolvedValue(undefined),
+  writeClipboardText: jest
+    .fn<BoardHost['writeClipboardText']>()
+    .mockResolvedValue(undefined),
 })
 
 test('renders board before cover loading finishes and merges successful covers', async () => {
@@ -1513,6 +1517,28 @@ test('a late detail response cannot replace the next card or reopen a closed dia
   expect(JSON.stringify(await view.render())).not.toContain(
     'BoardDialogOverlay',
   )
+})
+
+test('copies a shareable card link and retains the card dialog', async () => {
+  const host = createHost()
+  jest
+    .mocked(host.execute)
+    .mockImplementation(async (command) =>
+      command === 'Layout.getHref'
+        ? 'https://example.test/boards/?theme=dark#5k8NLHLh'
+        : undefined,
+    )
+  const view = await openBoard(host)
+  await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
+  await flush()
+  await view.handleEvent?.({ name: 'board-card-actions', type: 'click' })
+  await view.handleEvent?.({ name: 'board-card-copy-link', type: 'click' })
+  await flush()
+  expect(host.writeClipboardText).toHaveBeenCalledWith(
+    'https://example.test/boards/?theme=dark#5k8NLHLh/card/one',
+  )
+  expect(JSON.stringify(await view.render())).toContain('Card link copied.')
+  view.dispose?.()
 })
 
 test('clicking the card dialog backdrop closes it while interior clicks preserve it', async () => {

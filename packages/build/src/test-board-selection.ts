@@ -30,6 +30,8 @@ export const testBoardSelection = async (
         type: string
       }
     | undefined
+  let archiveRequests = 0
+  let archived = false
   let detailLoads = 0
   let imageLoads = 0
   let empty = false
@@ -108,17 +110,25 @@ export const testBoardSelection = async (
       const id = path.split('/').at(-1)
       body = {
         cards: [
-          {
-            badges: { attachments: 1, comments: 3 },
-            id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
-            idList: 'bbbbbbbbbbbbbbbbbbbbbbbb',
-            labels: [
-              { color: 'yellow', id: 'yellow-label', name: 'In progress' },
-              { color: 'red', id: 'red-label', name: 'Urgent' },
-            ],
-            name: 'Card with cover',
-            pos: 1,
-          },
+          ...(archived
+            ? []
+            : [
+                {
+                  badges: { attachments: 1, comments: 3 },
+                  id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+                  idList: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+                  labels: [
+                    {
+                      color: 'yellow',
+                      id: 'yellow-label',
+                      name: 'In progress',
+                    },
+                    { color: 'red', id: 'red-label', name: 'Urgent' },
+                  ],
+                  name: 'Card with cover',
+                  pos: 1,
+                },
+              ]),
           {
             badges: { attachments: 0, comments: 0 },
             id: 'card-2',
@@ -181,7 +191,7 @@ export const testBoardSelection = async (
       await route.fulfill({
         headers: {
           'Access-Control-Allow-Headers': 'authorization',
-          'Access-Control-Allow-Methods': 'GET, POST',
+          'Access-Control-Allow-Methods': 'GET, POST, PUT',
           'Access-Control-Allow-Origin': '*',
         },
         status: 204,
@@ -274,6 +284,16 @@ export const testBoardSelection = async (
       return
     }
     if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa') {
+      if (request.method() === 'PUT') {
+        assert.equal(url.searchParams.get('closed'), 'true')
+        archived = ++archiveRequests === 2
+        await route.fulfill({
+          headers: { 'Access-Control-Allow-Origin': '*' },
+          json: { closed: archived, id: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+          status: archived ? 200 : 503,
+        })
+        return
+      }
       const load = ++detailLoads
       if (load === 2) {
         await releaseCardRefresh.promise
@@ -1313,6 +1333,70 @@ export const testBoardSelection = async (
     await breadcrumb
       .getByRole('heading', { level: 1, name: 'Engineering' })
       .waitFor()
+    const cardTile = directPage.locator(
+      'button[name="board-card:aaaaaaaaaaaaaaaaaaaaaaaa"]',
+    )
+    await cardTile.click()
+    const cardActions = directDialog.getByRole('button', {
+      name: 'More card actions',
+    })
+    const actionPanel = directDialog.getByRole('group', {
+      name: 'Card actions',
+    })
+    await cardActions.focus()
+    await directPage.keyboard.press('Enter')
+    await actionPanel.waitFor()
+    await directPage.keyboard.press('Escape')
+    await actionPanel.waitFor({ state: 'detached' })
+    assert.equal(
+      await cardActions.evaluate((button) => button === document.activeElement),
+      true,
+    )
+    await cardActions.click()
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+    await actionPanel.getByRole('button', { name: 'Copy card link' }).click()
+    await directDialog.getByText('Card link copied.', { exact: true }).waitFor()
+    assert.equal(
+      await directPage.evaluate(() =>
+        globalThis.navigator.clipboard.readText(),
+      ),
+      deepLink.href,
+    )
+    await cardActions.click()
+    assert.ok(
+      await actionPanel.evaluate((panel) => {
+        const bounds = panel.getBoundingClientRect()
+        return bounds.left >= 0 && bounds.right <= globalThis.innerWidth
+      }),
+    )
+    await actionPanel.getByRole('button', { name: 'Move to list' }).click()
+    await actionPanel
+      .getByRole('button', { exact: true, name: 'Doing' })
+      .click()
+    await directDialog.getByLabel('Status: Doing').waitFor()
+    assert.equal(
+      await directPage.locator('.BoardCards').nth(1).locator(cardTile).count(),
+      1,
+    )
+    await cardActions.click()
+    await actionPanel.getByRole('button', { name: 'Archive card' }).click()
+    await directDialog
+      .getByRole('alert')
+      .getByText('Trello is temporarily unavailable.', { exact: false })
+      .waitFor()
+    assert.equal(await cardTile.count(), 1)
+    await cardActions.click()
+    await actionPanel.getByRole('button', { name: 'Archive card' }).click()
+    await directDialog.waitFor({ state: 'detached' })
+    await cardTile.waitFor({ state: 'detached' })
+    await directPage.waitForURL((url) => url.hash === '#22222222')
+    await directPage.reload()
+    await directPage.getByRole('button', { name: 'No activity' }).waitFor()
+    assert.equal(await cardTile.count(), 0)
+    assert.equal(archiveRequests, 2)
+    process.stdout.write(
+      'Card actions: keyboard dismissal, copy link, move and archive with retry: pass\n',
+    )
     await directPage.getByRole('searchbox', { name: 'Search boards' }).focus()
     await directPage.keyboard.press('Shift+Tab')
     const boardsButton = breadcrumb.getByRole('button', {

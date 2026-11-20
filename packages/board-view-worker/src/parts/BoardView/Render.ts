@@ -21,6 +21,10 @@ const descriptionInputClass = mergeClassNames(
   'BoardDescriptionInput',
 )
 const titleInputClass = mergeClassNames('BoardInput', 'BoardDialogTitleInput')
+const cardActionMenuClass = mergeClassNames(
+  'BoardOverflowMenu',
+  'BoardCardActionMenu',
+)
 const commentInputClass = mergeClassNames('BoardInput', 'BoardCommentInput')
 const searchInputClass = mergeClassNames('BoardInput', 'BoardSearchInput')
 
@@ -38,6 +42,10 @@ export interface BoardState {
   readonly board: TrelloBoard | undefined
   readonly boardId: string
   readonly boards: readonly TrelloBoardSummary[]
+  readonly cardAction?: 'archive' | 'copy' | 'move' | undefined
+  readonly cardActionError?: string | undefined
+  readonly cardActionMessage?: string | undefined
+  readonly cardActionPanel?: 'actions' | 'move' | undefined
   readonly cardDraft?: CardDraft | undefined
   readonly commentDraft?: string | undefined
   readonly commentError?: string | undefined
@@ -461,6 +469,7 @@ const renderActivityDate = (value: string, now: number): Dom.Node => {
 
 const renderCommentComposer = (state: BoardState): Dom.Node => {
   const {
+    cardAction,
     commentDraft = '',
     commentError,
     detailsError,
@@ -472,7 +481,7 @@ const renderCommentComposer = (state: BoardState): Dom.Node => {
     Dom.node(VirtualDomElements.TextArea, {
       ariaLabel: 'Write a comment',
       className: commentInputClass,
-      disabled: Boolean(postingComment),
+      disabled: Boolean(postingComment || cardAction),
       name: 'board-comment-text',
       onInput: 'handleInput',
       placeholder: 'Write a comment…',
@@ -485,6 +494,7 @@ const renderCommentComposer = (state: BoardState): Dom.Node => {
         className: primaryButtonClass,
         disabled: Boolean(
           postingComment ||
+          cardAction ||
           savingCard ||
           detailsLoading ||
           detailsError ||
@@ -585,9 +595,95 @@ const renderDescriptionPreview = (state: BoardState): Dom.Node => {
   ])
 }
 
+const renderCardActions = (
+  state: Readonly<BoardState>,
+  card: Readonly<TrelloCard>,
+): Dom.Node => {
+  const {
+    board,
+    cardAction,
+    cardActionPanel,
+    detailsLoading,
+    loading,
+    postingComment,
+    savingCard,
+  } = state
+  const destinations = board?.lists.filter(({ id }) => id !== card.idList) || []
+  const moving = cardActionPanel === 'move'
+  return Dom.div('BoardOverflow', [
+    Dom.button('board-card-actions', '', 'BoardButton BoardCardOptionsButton', {
+      ariaExpanded: Boolean(cardActionPanel),
+      ariaLabel: 'More card actions',
+      disabled: Boolean(
+        cardAction || detailsLoading || loading || postingComment || savingCard,
+      ),
+    }),
+    ...(cardActionPanel
+      ? [
+          Dom.node(
+            VirtualDomElements.Div,
+            {
+              ariaLabel: 'Card actions',
+              className: cardActionMenuClass,
+              role: 'group',
+            },
+            [
+              Dom.button('board-card-move', 'Move to list', 'BoardButton', {
+                ariaExpanded: moving,
+                disabled: destinations.length === 0,
+              }),
+              ...(moving
+                ? destinations.map(({ id, name }) =>
+                    Dom.button(
+                      `board-card-move:${id}`,
+                      name,
+                      'BoardButton BoardCardDestination',
+                    ),
+                  )
+                : []),
+              Dom.button(
+                'board-card-copy-link',
+                'Copy card link',
+                'BoardButton',
+              ),
+              Dom.button('board-card-archive', 'Archive card', 'BoardButton'),
+            ],
+          ),
+        ]
+      : []),
+  ])
+}
+
+const renderCardActionFeedback = (
+  state: Readonly<BoardState>,
+): readonly Dom.Node[] => {
+  const { cardAction, cardActionError, cardActionMessage } = state
+  if (cardActionError) {
+    return [
+      Dom.node(
+        VirtualDomElements.Div,
+        { className: 'BoardDialogError', role: 'alert' },
+        [Dom.textNode(cardActionError)],
+      ),
+    ]
+  }
+  const progress = { archive: 'Archiving…', copy: '', move: 'Moving…' }
+  const message = cardActionMessage || (cardAction && progress[cardAction])
+  return message
+    ? [
+        Dom.node(
+          VirtualDomElements.Div,
+          { className: 'BoardActivityDate', role: 'status' },
+          [Dom.textNode(message)],
+        ),
+      ]
+    : []
+}
+
 const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
   const {
     board,
+    cardAction,
     details,
     detailsError,
     detailsLoading,
@@ -615,7 +711,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
       ],
     )
   const editingDisabled = Boolean(
-    detailsError || detailsLoading || postingComment,
+    detailsError || detailsLoading || postingComment || cardAction,
   )
   const status =
     board?.lists.find((list) => list.id === editingCard.idList)?.name ||
@@ -639,18 +735,23 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
             { ariaLabel: `Status: ${status}`, className: 'BoardCardStatus' },
             [Dom.textNode(status)],
           ),
-          Dom.button('board-card-cancel', '', 'BoardDialogClose', {
-            ariaLabel: 'Close card',
-            disabled: Boolean(postingComment),
-          }),
+          Dom.div('BoardDialogControls', [
+            renderCardActions(state, editingCard),
+            Dom.button('board-card-cancel', '', 'BoardDialogClose', {
+              ariaLabel: 'Close card',
+              disabled: Boolean(postingComment || cardAction),
+            }),
+          ]),
         ]),
         Dom.div('BoardDialogBody', [
           Dom.div('BoardDialogMain', [
+            ...renderCardActionFeedback(state),
             Dom.heading(2, 'BoardDialogTitle', [
               editingTitle
                 ? Dom.node(VirtualDomElements.Input, {
                     ariaLabel: 'Title',
                     className: titleInputClass,
+                    disabled: Boolean(cardAction),
                     inputType: 'text',
                     name: 'edit-card-name',
                     onBlur: 'handleBlur',
@@ -695,6 +796,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                           Dom.node(VirtualDomElements.TextArea, {
                             ariaLabel: 'Markdown source',
                             className: descriptionInputClass,
+                            disabled: Boolean(cardAction),
                             name: 'edit-card-desc',
                             onInput: 'handleInput',
                             value: editDesc || '',
