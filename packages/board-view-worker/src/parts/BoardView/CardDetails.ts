@@ -3,7 +3,7 @@ interface CardAttachment {
   readonly url: string
 }
 
-interface CardActivity {
+export interface CardActivity {
   readonly author: string
   readonly date: string
   readonly text: string
@@ -52,25 +52,21 @@ const activityText = (
   return ''
 }
 
-const normalizeActivities = (
-  values: readonly unknown[],
-): readonly CardActivity[] => {
-  const activities: CardActivity[] = []
-  for (const action of values) {
-    if (
-      !isRecord(action) ||
-      !isRecord(action.data) ||
-      typeof action.date !== 'string'
-    )
-      continue
-    const { data, date, memberCreator, type } = action
-    const member = isRecord(memberCreator) ? memberCreator : undefined
-    const author =
-      typeof member?.fullName === 'string' ? member.fullName : 'Trello member'
-    const text = activityText(type, data)
-    if (text) activities.push({ author, date, text })
-  }
-  return activities
+export const normalizeActivity = (
+  action: unknown,
+): CardActivity | undefined => {
+  if (
+    !isRecord(action) ||
+    !isRecord(action.data) ||
+    typeof action.date !== 'string'
+  )
+    return undefined
+  const { data, date, memberCreator, type } = action
+  const member = isRecord(memberCreator) ? memberCreator : undefined
+  const author =
+    typeof member?.fullName === 'string' ? member.fullName : 'Trello member'
+  const text = activityText(type, data)
+  return text ? { author, date, text } : undefined
 }
 
 export const normalizeDetails = (value: unknown): CardDetails => {
@@ -82,7 +78,10 @@ export const normalizeDetails = (value: unknown): CardDetails => {
   )
     throw new Error('Invalid card details')
   return {
-    activities: normalizeActivities(value.actions),
+    activities: value.actions.flatMap((action) => {
+      const activity = normalizeActivity(action)
+      return activity ? [activity] : []
+    }),
     attachments: normalizeAttachments(value.attachments),
     desc: value.desc,
   }
