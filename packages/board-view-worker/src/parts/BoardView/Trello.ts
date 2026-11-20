@@ -807,12 +807,16 @@ export const createTrelloClient = (
       if (signal.aborted) throw error
       if (
         error instanceof TrelloError &&
-        error.details.code === 'TRELLO_ACCESS_DENIED'
+        [
+          'TRELLO_ACCESS_DENIED',
+          'TRELLO_CONNECTION_REQUIRED',
+          'TRELLO_REAUTHORIZE_REQUIRED',
+        ].includes(error.details.code)
       )
         throw new TrelloError({
           code: 'TRELLO_WRITE_DENIED',
           message:
-            'Trello rejected this card. Check that you can add cards to this board. If you can, disconnect and reconnect Trello to refresh its access. Your title is still here so you can retry.',
+            'Trello denied access to add this card. If you have permission to add cards to this board, reconnect Trello and try again. Your title has been kept.',
         })
       throw new TrelloError({
         code: 'TRELLO_CREATE_FAILED',

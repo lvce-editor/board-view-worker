@@ -89,8 +89,8 @@ export const button = (
   return node(
     VirtualDomElements.Button,
     {
-      buttonType: 'button',
       className,
+      inputType: 'button',
       ...(options.ariaLabel && { ariaLabel: options.ariaLabel }),
       ...(typeof options.ariaExpanded === 'boolean' && {
         ariaExpanded: options.ariaExpanded,
