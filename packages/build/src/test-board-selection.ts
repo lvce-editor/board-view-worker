@@ -600,6 +600,9 @@ export const testBoardSelection = async (
         .click(),
     ])
     const dialog = page.getByRole('dialog', { name: 'Edit Trello card' })
+    const cardHash = '#22222222/card/aaaaaaaaaaaaaaaaaaaaaaaa'
+    await page.waitForURL((url) => url.hash === cardHash)
+    const cardUrl = page.url()
     await page.getByText('Loading card details…', { exact: true }).waitFor()
     const dialogBeforeDetails = await dialog.count()
     const pendingImage = page.waitForRequest(
@@ -703,6 +706,7 @@ export const testBoardSelection = async (
       .locator('.BoardDialogOverlay')
       .click({ position: { x: 5, y: 5 } })
     await dialog.waitFor({ state: 'detached' })
+    await page.waitForURL((url) => url.hash === '#22222222')
     await page.setViewportSize({ height: 720, width: 1280 })
     await page
       .getByRole('button', { exact: false, name: 'Card with cover' })
@@ -1077,6 +1081,39 @@ export const testBoardSelection = async (
       { idList: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: draft },
     ])
     process.stdout.write('Add card recovers from Trello write denial: pass\n')
+
+    // Search from a different board and open the copied card URL in a new tab.
+    await boardSearch.fill('cover')
+    const cardResult = page.getByRole('button', {
+      name: 'Card · Card with cover — Engineering',
+    })
+    await cardResult.click()
+    await page.waitForURL((url) => url.hash === cardHash)
+    await dialog.getByRole('button', { name: 'Close card' }).click()
+    await page.waitForURL((url) => url.hash === '#22222222')
+
+    const directPage = await context.newPage()
+    const deepLink = new URL(cardUrl)
+    deepLink.searchParams.set('card-url-test', 'retained')
+    await directPage.goto(deepLink.href)
+    const directDialog = directPage.getByRole('dialog', {
+      name: 'Edit Trello card',
+    })
+    const directTitle = directDialog.getByRole('textbox', { name: 'Title' })
+    assert.equal(await directTitle.inputValue(), 'Card with cover')
+    await directPage.reload()
+    assert.equal(await directTitle.inputValue(), 'Card with cover')
+    await directDialog.getByRole('button', { name: 'Close card' }).click()
+    await directPage.waitForURL((url) => url.hash === '#22222222')
+    const boardUrl = new URL(directPage.url())
+    assert.equal(boardUrl.pathname, deepLink.pathname)
+    assert.equal(boardUrl.search, deepLink.search)
+    await directDialog.waitFor({ state: 'detached' })
+    await directPage.close()
+    process.stdout.write(
+      'Card URLs: click, search, direct navigation, reload and dismissal: pass\n',
+    )
+
     holdRevalidation = true
     await Promise.all([
       page.waitForRequest(
