@@ -412,6 +412,7 @@ export interface TrelloClient {
   readonly loadCard: (
     id: string,
     signal: Readonly<AbortSignal>,
+    onCached?: (details: CardDetails) => void,
   ) => Promise<CardDetails>
   readonly loadCovers: (
     input: string,
@@ -587,10 +588,12 @@ export const createTrelloClient = (
     path: string,
     signal: Readonly<AbortSignal>,
     accessToken?: string,
+    cache?: RequestCache,
   ): Promise<unknown> => {
     const token = accessToken ?? (await getTrelloAccessToken(signal))
     const url = new URL(`/1/${path}`, 'https://api.trello.com')
     const response = await request(url.href, {
+      ...(cache && { cache }),
       credentials: 'omit',
       headers: { Authorization: `Bearer ${token}` },
       redirect: 'error',
@@ -693,6 +696,7 @@ export const createTrelloClient = (
   const loadCard = async (
     id: string,
     signal: Readonly<AbortSignal>,
+    onCached?: (details: CardDetails) => void,
   ): Promise<CardDetails> => {
     if (!cardIdPattern.test(id)) throw new TrelloError(boardError(404))
     try {
@@ -705,34 +709,42 @@ export const createTrelloClient = (
       })}`
       const revision = cacheRevision
       const token = await getTrelloAccessToken(signal)
-      const cache = await openCardCache(cardDetailsCache)
-      const key = cache
-        ? await cacheRequestUrl(`https://api.trello.com/1/${path}`, token)
-        : undefined
-      const cached = await readCardCache(cache, key)
       signal.throwIfAborted()
-      if (
-        cached &&
-        Number(cached.headers.get('X-Board-Cache-Until')) > Date.now()
-      ) {
-        try {
-          const details = normalizeDetails(await cached.json())
-          if (revision === cacheRevision) return details
-        } catch {
-          // Fetch again if the stored response is unreadable.
-        }
+      const cacheEntry = async (): Promise<{
+        readonly cache: Cache | undefined
+        readonly key: string | undefined
+      }> => {
+        const cache = await openCardCache(cardDetailsCache)
+        const key = cache
+          ? await cacheRequestUrl(`https://api.trello.com/1/${path}`, token)
+          : undefined
+        return { cache, key }
       }
-      const data = await trelloRequest(path, signal, token)
+      const entry = cacheEntry()
+      const readCachedDetails = async (): Promise<void> => {
+        if (!onCached) return
+        const { cache, key } = await entry
+        const cached = await readCardCache(cache, key)
+        if (!cached) return
+        let details: CardDetails
+        try {
+          details = normalizeDetails(await cached.json())
+        } catch {
+          return
+        }
+        if (!signal.aborted && revision === cacheRevision) onCached(details)
+      }
+      const [result] = await Promise.allSettled([
+        trelloRequest(path, signal, token, 'no-store'),
+        readCachedDetails(),
+      ])
+      signal.throwIfAborted()
+      if (result.status === 'rejected') throw result.reason
+      const data = result.value
       const details = normalizeDetails(data)
+      const { cache, key } = await entry
       if (key && !signal.aborted && revision === cacheRevision) {
-        const expires = String(Date.now() + 5 * 60_000)
-        await writeCardCache(
-          cache,
-          key,
-          Response.json(data, {
-            headers: { 'X-Board-Cache-Until': expires },
-          }),
-        )
+        await writeCardCache(cache, key, Response.json(data))
       }
       return details
     } catch (error) {

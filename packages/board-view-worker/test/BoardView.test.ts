@@ -344,7 +344,11 @@ test('searches Trello cards remotely and opens the owning board and card', async
   })
   await flush()
   expect(host.load).toHaveBeenCalledWith('12345678', expect.any(AbortSignal))
-  expect(host.loadCard).toHaveBeenCalledWith(cardId, expect.any(AbortSignal))
+  expect(host.loadCard).toHaveBeenCalledWith(
+    cardId,
+    expect.any(AbortSignal),
+    expect.any(Function),
+  )
   expect(JSON.stringify(await view.render())).toContain('BoardDialogOverlay')
   view.dispose?.()
 })
