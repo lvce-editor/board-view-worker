@@ -36,6 +36,8 @@ import {
 export const viewId = 'chat2.views.board'
 const connectionsPreference = 'chat2.connectedBoardIds'
 const hostedBoardUrl = 'https://lvce-editor.github.io/board-view-worker/boards/'
+const hostedBoardPath = new URL(hostedBoardUrl).pathname
+const hostedHomePath = new URL('..', hostedBoardUrl).pathname
 
 const isCardTitleBlur = (event: Readonly<ViewEvent>): boolean =>
   event.type === 'blur' && event.name === 'board-card-title'
@@ -171,8 +173,19 @@ const setBoardHash = async (
   try {
     const href = await getHrefFromHost(host)
     const url = getUrl(href)
-    if (!url || !isBoardPath(url.pathname) || isCurrent?.() === false) return
-    await host.execute('Layout.setHash', hash)
+    if (!url || isCurrent?.() === false) return
+    if (isBoardPath(url.pathname)) {
+      await host.execute('Layout.setHash', hash)
+    } else if (
+      hash &&
+      url.pathname === hostedHomePath &&
+      (url.protocol === 'https:' || url.protocol === 'http:')
+    ) {
+      await host.execute(
+        'Layout.setPathName',
+        `${hostedBoardPath}${url.search}${hash}`,
+      )
+    }
   } catch {
     // Older editor builds do not expose URL commands.
   }
@@ -1956,7 +1969,10 @@ export const createInstance = async (
       return
     }
     refreshFavicon(initialId, initialBoard, generation)
-    if (!urlCardId) return
+    if (!urlCardId) {
+      if (!urlBoardId) void syncBoardHash()
+      return
+    }
     const card = initialBoard.cards.find((item) => item.id === urlCardId)
     if (card) showCard(card)
     else void syncBoardHash()
