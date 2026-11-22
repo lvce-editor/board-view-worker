@@ -1580,6 +1580,40 @@ export const testBoardSelection = async (
     process.stdout.write(
       'standalone Trello discovery, board favicons, clickable board tiles, empty state and retry: pass\n',
     )
+
+    archived = false
+    holdRevalidation = false
+    const homeUrl = new URL('?test-board-route=retained', baseUrl)
+    await page.goto(homeUrl.href)
+    const boardsTab = page.getByRole('tab', { exact: true, name: 'Boards' })
+    if ((await boardsTab.getAttribute('aria-selected')) !== 'true')
+      await boardsTab.click()
+    await page
+      .getByRole('button', { exact: true, name: 'Open Engineering' })
+      .click()
+
+    const homeBoardUrl = new URL('boards/', baseUrl)
+    homeBoardUrl.search = homeUrl.search
+    homeBoardUrl.hash = '#22222222'
+    await page.waitForURL(homeBoardUrl.href)
+    await page.reload()
+    await page
+      .getByRole('heading', { exact: true, name: 'Engineering' })
+      .waitFor()
+
+    await cardButton.click()
+    const cardDetailUrl = new URL(homeBoardUrl)
+    cardDetailUrl.hash = cardHash
+    await page.waitForURL(cardDetailUrl.href)
+    await page.reload()
+    await dialog
+      .getByRole('button', { exact: true, name: 'Card with cover' })
+      .waitFor()
+    await dialog.getByRole('button', { name: 'Close card' }).click()
+    await page.waitForURL(homeBoardUrl.href)
+    process.stdout.write(
+      'Standalone homepage: board and card URLs survive reload\n',
+    )
   } finally {
     releaseDetails.resolve()
     releaseCardRefresh.resolve()
