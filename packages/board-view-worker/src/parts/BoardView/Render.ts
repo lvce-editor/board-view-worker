@@ -1045,8 +1045,10 @@ const renderToolbar = (state: BoardState): Dom.Node => {
   )
 }
 
-const getBoardStyle = (board: TrelloBoard | undefined): string | undefined => {
-  if (!board) return undefined
+const getBoardStyle = (board: TrelloBoard | undefined): string => {
+  // The renderer keeps the previous inline style when the next style is empty.
+  if (!board)
+    return 'background-color:var(--BoardBackground);background-image:none'
   const backgroundImage = board.backgroundImage
     ? `url("${board.backgroundImage}")`
     : board.backgroundGradient
