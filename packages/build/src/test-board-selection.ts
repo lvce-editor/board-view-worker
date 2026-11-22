@@ -1330,9 +1330,27 @@ export const testBoardSelection = async (
     const breadcrumb = directPage.getByRole('navigation', {
       name: 'Breadcrumb',
     })
-    await breadcrumb
-      .getByRole('heading', { level: 1, name: 'Engineering' })
-      .waitFor()
+    const boardHeading = breadcrumb.getByRole('heading', {
+      level: 1,
+      name: 'Engineering',
+    })
+    const boardsButton = breadcrumb.getByRole('button', {
+      exact: true,
+      name: 'Boards',
+    })
+    await boardHeading.waitFor()
+    const headingFont = await boardHeading.evaluate((heading) => {
+      const { fontSize, fontWeight } = getComputedStyle(heading)
+      return { fontSize, fontWeight }
+    })
+    assert.deepEqual(
+      await boardsButton.evaluate((button) => {
+        const { fontSize, fontWeight } = getComputedStyle(button)
+        return { fontSize, fontWeight }
+      }),
+      headingFont,
+      'Boards and the current board title share the same typography',
+    )
     const cardTile = directPage.locator(
       'button[name="board-card:aaaaaaaaaaaaaaaaaaaaaaaa"]',
     )
@@ -1399,10 +1417,6 @@ export const testBoardSelection = async (
     )
     await directPage.getByRole('searchbox', { name: 'Search boards' }).focus()
     await directPage.keyboard.press('Shift+Tab')
-    const boardsButton = breadcrumb.getByRole('button', {
-      exact: true,
-      name: 'Boards',
-    })
     assert.ok(
       await boardsButton.evaluate(
         (button) =>
