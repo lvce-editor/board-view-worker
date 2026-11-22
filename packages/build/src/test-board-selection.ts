@@ -1,7 +1,13 @@
 // cspell:words prefs
 
-import type { Browser } from 'playwright'
+import type { Browser, Page } from 'playwright'
 import assert from 'node:assert/strict'
+
+const readBoardBackground = (page: Page) =>
+  page.locator('.BoardView').evaluate((element) => {
+    const { backgroundColor, backgroundImage } = getComputedStyle(element)
+    return { backgroundColor, backgroundImage }
+  })
 
 // Exercise the real static workbench and extension event bridge. Only the
 // authenticated backend boundary is mocked; no Trello credentials are used.
@@ -514,6 +520,7 @@ export const testBoardSelection = async (
       await page.locator('button[name="board-provider:trello"]').count(),
       0,
     )
+    const listBackground = await readBoardBackground(page)
     assert.equal(await tiles.count(), 3)
     assert.deepEqual(await page.locator('.BoardTileName').allTextContents(), [
       'Design & research',
@@ -1579,6 +1586,11 @@ export const testBoardSelection = async (
     assert.equal(
       directPage.url(),
       new URL(deepLink.pathname + deepLink.search, deepLink).href,
+    )
+    assert.deepEqual(
+      await readBoardBackground(directPage),
+      listBackground,
+      'Returning from board detail restores the boards list background',
     )
     await directPage.close()
     process.stdout.write(
