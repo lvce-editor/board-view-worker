@@ -41,6 +41,54 @@ const parseLinkToken = (
   return { endIndex: destinationEnd + 1, node }
 }
 
+const autoLinkPattern = /<(https?:\/\/[^\s<>]+)>|(https?:\/\/[^\s<>"`]+)/iuy
+const urlContinuation = /[\p{L}\p{N}_@/:]/u
+const trailingPunctuation = /[.,!?;:]/u
+
+const trimBareUrl = (value: string): string => {
+  let openParentheses = 0
+  let closeParentheses = 0
+  for (const char of value) {
+    if (char === '(') openParentheses++
+    else if (char === ')') closeParentheses++
+  }
+  let end = value.length
+  while (end > 0) {
+    const char = value[end - 1]
+    if (char === ')' && closeParentheses > openParentheses) {
+      closeParentheses--
+    } else if (!trailingPunctuation.test(char)) {
+      break
+    }
+    end--
+  }
+  return value.slice(0, end)
+}
+
+const parseAutoLink = (
+  text: string,
+  index: number,
+): InlineToken | undefined => {
+  if (
+    text[index] !== '<' &&
+    index > 0 &&
+    urlContinuation.test(text[index - 1])
+  ) {
+    return undefined
+  }
+  autoLinkPattern.lastIndex = index
+  const match = autoLinkPattern.exec(text)
+  if (!match) return undefined
+  const [, enclosed, bare] = match
+  const label = enclosed ?? trimBareUrl(bare)
+  const url = safeUrl(label)
+  if (!url) return undefined
+  return {
+    endIndex: index + (enclosed ? match[0] : label).length,
+    node: Dom.link(url, label, 'BoardDescriptionLink'),
+  }
+}
+
 const parseFormattedToken = (
   text: string,
   index: number,
@@ -71,7 +119,9 @@ const renderInline = (text: string): readonly Dom.Node[] => {
   let index = 0
   while (index < text.length) {
     const token =
-      parseLinkToken(text, index) || parseFormattedToken(text, index)
+      parseLinkToken(text, index) ||
+      parseFormattedToken(text, index) ||
+      parseAutoLink(text, index)
     if (!token) {
       index++
       continue

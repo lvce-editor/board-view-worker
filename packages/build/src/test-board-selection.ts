@@ -13,7 +13,13 @@ export const testBoardSelection = async (
   const backend = 'https://trello-selection.test'
   const previewPath =
     '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/previews/eeeeeeeeeeeeeeeeeeeeeeee/download/image.png'
-  const description = `# Card notes\n\nA **detailed description** from Trello.\n\n![Design diagram](https://trello.com${previewPath})`
+  const pastedUrl = 'https://example.com/wiki/Board_(project)?tab=details'
+  const autolinkUrl = 'https://example.com/updates'
+  const markdownUrl = 'https://example.com/roadmap'
+  const description = `# Card notes\n\nA **detailed description** from Trello.\n\nSee (${pastedUrl}), <${autolinkUrl}>, and [the roadmap](${markdownUrl}).\n\n![Design diagram](https://trello.com${previewPath})`
+  await context.route(pastedUrl, (route) =>
+    route.fulfill({ body: 'Board project', contentType: 'text/plain' }),
+  )
   const releaseDetails = Promise.withResolvers<void>()
   const releaseCardRefresh = Promise.withResolvers<void>()
   const releasePhoto = Promise.withResolvers<void>()
@@ -757,7 +763,32 @@ export const testBoardSelection = async (
       3,
     )
     assert.equal(await dialog.getByLabel('Status: Todo').textContent(), 'Todo')
-    assert.equal(await dialog.locator('.BoardDescriptionMarkdown').count(), 1)
+    const descriptionPreview = dialog.locator('.BoardDescriptionMarkdown')
+    assert.equal(await descriptionPreview.count(), 1)
+    const pastedLink = descriptionPreview.getByRole('link', {
+      exact: true,
+      name: pastedUrl,
+    })
+    assert.equal(await pastedLink.getAttribute('href'), pastedUrl)
+    assert.equal(
+      await descriptionPreview
+        .getByRole('link', { exact: true, name: autolinkUrl })
+        .getAttribute('href'),
+      autolinkUrl,
+    )
+    assert.equal(
+      await descriptionPreview
+        .getByRole('link', { name: 'the roadmap' })
+        .getAttribute('href'),
+      markdownUrl,
+    )
+    const [linkedPage] = await Promise.all([
+      page.waitForEvent('popup'),
+      pastedLink.click(),
+    ])
+    await linkedPage.getByText('Board project', { exact: true }).waitFor()
+    assert.equal(linkedPage.url(), pastedUrl)
+    await linkedPage.close()
     const descriptionEdit = dialog.getByRole('button', {
       name: 'Edit',
     })
