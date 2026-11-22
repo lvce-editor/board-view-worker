@@ -33,6 +33,7 @@ const board: TrelloBoard = {
   name: 'Work',
 }
 const createHost = (): BoardHost => ({
+  addAttachment: jest.fn<BoardHost['addAttachment']>(),
   addComment: jest.fn<BoardHost['addComment']>(),
   archiveCard: jest.fn<BoardHost['archiveCard']>().mockResolvedValue(undefined),
   authorize: jest

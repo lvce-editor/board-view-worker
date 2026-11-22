@@ -1,4 +1,4 @@
-interface CardAttachment {
+export interface CardAttachment {
   readonly name: string
   readonly url: string
 }
@@ -18,22 +18,19 @@ export interface CardDetails {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
-const normalizeAttachments = (
-  values: readonly unknown[],
-): readonly CardAttachment[] => {
-  const attachments: CardAttachment[] = []
-  for (const attachment of values) {
-    if (
-      !isRecord(attachment) ||
-      typeof attachment.name !== 'string' ||
-      typeof attachment.url !== 'string'
-    )
-      continue
-    const url = URL.parse(attachment.url)
-    if (url?.protocol === 'https:')
-      attachments.push({ name: attachment.name, url: url.href })
-  }
-  return attachments
+export const normalizeAttachment = (
+  attachment: unknown,
+): CardAttachment | undefined => {
+  if (
+    !isRecord(attachment) ||
+    typeof attachment.name !== 'string' ||
+    typeof attachment.url !== 'string'
+  )
+    return undefined
+  const url = URL.parse(attachment.url)
+  if (url?.protocol === 'https:')
+    return { name: attachment.name, url: url.href }
+  return undefined
 }
 
 const activityText = (
@@ -82,7 +79,10 @@ export const normalizeDetails = (value: unknown): CardDetails => {
       const activity = normalizeActivity(action)
       return activity ? [activity] : []
     }),
-    attachments: normalizeAttachments(value.attachments),
+    attachments: value.attachments.flatMap((item) => {
+      const attachment = normalizeAttachment(item)
+      return attachment ? [attachment] : []
+    }),
     desc: value.desc,
   }
 }

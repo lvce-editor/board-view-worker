@@ -42,7 +42,7 @@ export interface BoardState {
   readonly board: TrelloBoard | undefined
   readonly boardId: string
   readonly boards: readonly TrelloBoardSummary[]
-  readonly cardAction?: 'archive' | 'copy' | 'move' | undefined
+  readonly cardAction?: 'archive' | 'copy' | 'move' | 'upload' | undefined
   readonly cardActionError?: string | undefined
   readonly cardActionMessage?: string | undefined
   readonly cardActionPanel?: 'actions' | 'move' | undefined
@@ -467,6 +467,9 @@ const renderActivityDate = (value: string, now: number): Dom.Node => {
   )
 }
 
+const cardActionBlocksTextInput = (action: BoardState['cardAction']): boolean =>
+  action !== undefined && action !== 'upload'
+
 const renderCommentComposer = (state: BoardState): Dom.Node => {
   const {
     cardAction,
@@ -481,7 +484,9 @@ const renderCommentComposer = (state: BoardState): Dom.Node => {
     Dom.node(VirtualDomElements.TextArea, {
       ariaLabel: 'Write a comment',
       className: commentInputClass,
-      disabled: Boolean(postingComment || cardAction),
+      disabled: Boolean(
+        postingComment || cardActionBlocksTextInput(cardAction),
+      ),
       name: 'board-comment-text',
       onInput: 'handleInput',
       placeholder: 'Write a comment…',
@@ -667,7 +672,12 @@ const renderCardActionFeedback = (
       ),
     ]
   }
-  const progress = { archive: 'Archiving…', copy: '', move: 'Moving…' }
+  const progress = {
+    archive: 'Archiving…',
+    copy: '',
+    move: 'Moving…',
+    upload: 'Uploading images…',
+  }
   const message = cardActionMessage || (cardAction && progress[cardAction])
   return message
     ? [
@@ -713,6 +723,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
   const editingDisabled = Boolean(
     detailsError || detailsLoading || postingComment || cardAction,
   )
+  const inputsDisabled = cardActionBlocksTextInput(cardAction)
   const status =
     board?.lists.find((list) => list.id === editingCard.idList)?.name ||
     'Unknown list'
@@ -724,6 +735,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
       className: 'BoardDialogOverlay',
       onClick: 'handleDialogOverlayClick',
       onKeyDown: 'handleDialogKeyDown',
+      onPaste: 'handleCardPaste',
       role: 'dialog',
       tabIndex: -1,
     },
@@ -751,7 +763,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                 ? Dom.node(VirtualDomElements.Input, {
                     ariaLabel: 'Title',
                     className: titleInputClass,
-                    disabled: Boolean(cardAction),
+                    disabled: inputsDisabled,
                     inputType: 'text',
                     name: 'edit-card-name',
                     onBlur: 'handleBlur',
@@ -796,7 +808,7 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                           Dom.node(VirtualDomElements.TextArea, {
                             ariaLabel: 'Markdown source',
                             className: descriptionInputClass,
-                            disabled: Boolean(cardAction),
+                            disabled: inputsDisabled,
                             name: 'edit-card-desc',
                             onInput: 'handleInput',
                             value: editDesc || '',

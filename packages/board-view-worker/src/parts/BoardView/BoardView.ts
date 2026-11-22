@@ -41,6 +41,7 @@ const isCardTitleBlur = (event: Readonly<ViewEvent>): boolean =>
   event.type === 'blur' && event.name === 'board-card-title'
 
 export interface BoardHost {
+  readonly addAttachment: typeof trelloClient.addAttachment
   readonly addComment: typeof trelloClient.addComment
   readonly archiveCard: typeof trelloClient.archiveCard
   readonly authorize: typeof trelloClient.authorize
@@ -82,6 +83,7 @@ interface CardPrefetch {
 }
 
 interface BoardViewInstance extends VirtualDomViewInstance, BoardDragHandlers {
+  readonly handleCardPaste: (files: unknown) => void
   readonly handleCardPointerDown: (
     name: string,
     button: number,
@@ -114,6 +116,7 @@ const isReauthorizationRequired = (error: unknown): boolean =>
   error instanceof TrelloError &&
   error.details.code === 'TRELLO_REAUTHORIZE_REQUIRED'
 const defaultHost: BoardHost = {
+  addAttachment: trelloClient.addAttachment,
   addComment: trelloClient.addComment,
   archiveCard: trelloClient.archiveCard,
   authorize: trelloClient.authorize,
@@ -238,6 +241,7 @@ export const createInstance = async (
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   let searchGeneration = 0
   let descriptionGeneration = 0
+  let attachmentUpload: Promise<void> | undefined
   let cardSave: Promise<boolean> | undefined
   let pendingDescriptionKey: string | undefined
   let cardMutationController: AbortController | undefined
@@ -350,6 +354,7 @@ export const createInstance = async (
   const cancel = (preserveDraft = false): void => {
     const { cardDraft, detailsLoading } = state
     generation++
+    attachmentUpload = undefined
     cardSave = undefined
     cancelCardPrefetch()
     controller?.abort()
@@ -560,11 +565,16 @@ export const createInstance = async (
       )
       const { board, boardId, details } = state
       if (disposed || requestGeneration !== generation || !board) return false
-      const updatedCard = { ...card, ...updated }
+      const attachmentCount = Math.max(
+        updated.attachmentCount ?? 0,
+        details?.attachments.length ?? 0,
+      )
+      const changes = { ...updated, attachmentCount }
+      const updatedCard = { ...card, ...changes }
       const updatedBoard = {
         ...board,
         cards: board.cards.map((item) =>
-          item.id === card.id ? { ...item, ...updated } : item,
+          item.id === card.id ? { ...item, ...changes } : item,
         ),
       }
       host.session.set(boardId, { board: updatedBoard })
@@ -593,8 +603,10 @@ export const createInstance = async (
   }
   const saveCard = async (): Promise<boolean> => {
     const requestGeneration = generation
-    while (cardSave) {
-      if (!(await cardSave) || requestGeneration !== generation) return false
+    while (attachmentUpload || cardSave) {
+      if (attachmentUpload) await attachmentUpload
+      else if (cardSave && !(await cardSave)) return false
+      if (requestGeneration !== generation) return false
     }
     const {
       details,
@@ -654,7 +666,7 @@ export const createInstance = async (
     focusCardActions = !focusCardActions
   }
   const runCardAction = async (
-    action: 'archive' | 'copy' | 'move',
+    action: NonNullable<BoardState['cardAction']>,
     perform: (
       card: TrelloCard,
       boardId: string,
@@ -697,6 +709,8 @@ export const createInstance = async (
             'Unable to archive this card. Refresh the board to check its status before trying again.',
           copy: 'Unable to copy the card link.',
           move: 'Unable to move this card. Refresh the board to check its list before trying again.',
+          upload:
+            'Unable to confirm the image upload. Reopen the card to check its attachments before retrying.',
         }
         state = {
           ...state,
@@ -711,9 +725,49 @@ export const createInstance = async (
         cardMutationController = undefined
       if (!signal.aborted) {
         state = { ...state, cardAction: undefined }
-        focusCardActions = !focusCardActions
+        if (action !== 'upload') focusCardActions = !focusCardActions
         void notify()
       }
+    }
+  }
+  const uploadImages = async (files: readonly File[]): Promise<void> => {
+    const { details, detailsError } = state
+    if (attachmentUpload || !details || detailsError) return
+    const upload = runCardAction('upload', async (card, boardId, signal) => {
+      for (const file of files) {
+        const attachment = await host.addAttachment(card.id, file, signal)
+        const { board, details, editingCard } = state
+        if (signal.aborted || !board || !details || editingCard?.id !== card.id)
+          return
+        const attachmentCount =
+          Math.max(
+            editingCard.attachmentCount ?? 0,
+            details.attachments.length,
+          ) + 1
+        const updatedBoard = {
+          ...board,
+          cards: board.cards.map((item) =>
+            item.id === card.id ? { ...item, attachmentCount } : item,
+          ),
+        }
+        host.session.set(boardId, { board: updatedBoard })
+        state = {
+          ...state,
+          board: updatedBoard,
+          details: {
+            ...details,
+            attachments: [...details.attachments, attachment],
+          },
+          editingCard: { ...editingCard, attachmentCount },
+        }
+        void notify()
+      }
+    })
+    attachmentUpload = upload
+    try {
+      await upload
+    } finally {
+      if (attachmentUpload === upload) attachmentUpload = undefined
     }
   }
   const copyCardLink = (): Promise<void> =>
@@ -1395,8 +1449,21 @@ export const createInstance = async (
   const loadCardDetails = async (
     loadPrefetched?: LoadPrefetchedCard,
   ): Promise<void> => {
-    const { detailsLoading, editingCard, postingComment, savingCard } = state
-    if (!editingCard || savingCard || detailsLoading || postingComment) return
+    const {
+      cardAction,
+      detailsLoading,
+      editingCard,
+      postingComment,
+      savingCard,
+    } = state
+    if (
+      !editingCard ||
+      savingCard ||
+      detailsLoading ||
+      postingComment ||
+      cardAction
+    )
+      return
     // A retry can keep rendering the cached description while it refreshes.
     if (!detailsController || detailsController.signal.aborted) {
       detailsController = new AbortController()
@@ -1793,6 +1860,14 @@ export const createInstance = async (
     handleBoardDrop(name: string): void {
       void moveCard(name)
     },
+    handleCardPaste(files: unknown): void {
+      if (!Array.isArray(files)) return
+      const images: File[] = files.filter(
+        (file): file is File =>
+          file instanceof File && file.type.startsWith('image/'),
+      )
+      if (images.length > 0) void uploadImages(images)
+    },
     handleCardPointerDown(
       name: string,
       button: number,
@@ -1924,6 +1999,10 @@ export const view: View<VirtualDomViewInstance> = {
     {
       name: 'handleDialogOverlayClick',
       params: ['handleDialogOverlayClick', 'event.target.className'],
+    },
+    {
+      name: 'handleCardPaste',
+      params: ['handleCardPaste', 'event.clipboardData.files'],
     },
     {
       name: 'handleDialogKeyDown',

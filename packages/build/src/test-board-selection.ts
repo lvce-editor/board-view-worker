@@ -30,6 +30,17 @@ export const testBoardSelection = async (
         type: string
       }
     | undefined
+  const pastedImage = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAFElEQVR4nGOUKn7BwMDAxMDAgKAAGzUBe6nlFkgAAAAASUVORK5CYII=',
+    'base64',
+  )
+  const pastedAttachment = {
+    name: 'pasted.png',
+    url: 'https://example.com/pasted.png',
+  }
+  const releaseAttachment = Promise.withResolvers<void>()
+  let uploadRequests = 0
+  let attachmentUploaded = false
   let archiveRequests = 0
   let archived = false
   let detailLoads = 0
@@ -114,7 +125,10 @@ export const testBoardSelection = async (
             ? []
             : [
                 {
-                  badges: { attachments: 1, comments: 3 },
+                  badges: {
+                    attachments: attachmentUploaded ? 2 : 1,
+                    comments: 3,
+                  },
                   id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
                   idList: 'bbbbbbbbbbbbbbbbbbbbbbbb',
                   labels: [
@@ -263,6 +277,29 @@ export const testBoardSelection = async (
       })
       return
     }
+    if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments') {
+      assert.equal(request.method(), 'POST')
+      const payload = request.postDataBuffer()
+      assert.ok(payload)
+      const form = await new Response(new Uint8Array(payload), {
+        headers: { 'Content-Type': request.headers()['content-type'] || '' },
+      }).formData()
+      const file = form.get('file')
+      assert.ok(file instanceof File)
+      assert.equal(file.name, pastedAttachment.name)
+      assert.equal(file.type, 'image/png')
+      assert.deepEqual(Buffer.from(await file.arrayBuffer()), pastedImage)
+      assert.equal(url.searchParams.get('setCover'), 'false')
+      const headers = { 'Access-Control-Allow-Origin': '*' }
+      if (++uploadRequests === 1) {
+        await route.fulfill({ headers, json: {}, status: 400 })
+        return
+      }
+      await releaseAttachment.promise
+      attachmentUploaded = true
+      await route.fulfill({ headers, json: pastedAttachment })
+      return
+    }
     if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/actions/comments') {
       assert.equal(request.method(), 'POST')
       const text = url.searchParams.get('text')
@@ -325,6 +362,7 @@ export const testBoardSelection = async (
           ],
           attachments: [
             { name: 'design.png', url: 'https://example.com/design.png' },
+            ...(attachmentUploaded ? [pastedAttachment] : []),
           ],
           desc:
             load === 1
@@ -895,6 +933,78 @@ export const testBoardSelection = async (
     await dialog.waitFor({ state: 'detached' })
     process.stdout.write(
       'Card comments: validation, failed write, retry, activity, badge and reopen: pass\n',
+    )
+    await cardButton.click()
+    await descriptionEdit.click()
+    const markdownSource = dialog.getByRole('textbox', {
+      name: 'Markdown source',
+    })
+    const previousDescription = await markdownSource.inputValue()
+    const descriptionDraft = `${previousDescription}\n\nUnsaved description`
+    await markdownSource.fill(descriptionDraft)
+    const paste = (image: boolean): Promise<boolean> =>
+      markdownSource.evaluate(
+        (element, { bytes, image, name }) => {
+          const clipboardData = new DataTransfer()
+          if (image) {
+            clipboardData.items.add(
+              new File([new Uint8Array(bytes)], name, { type: 'image/png' }),
+            )
+          } else {
+            clipboardData.setData('text/plain', 'Ordinary pasted text')
+            clipboardData.items.add(
+              new File(['sample'], 'notes.txt', { type: 'text/plain' }),
+            )
+          }
+          return element.dispatchEvent(
+            new ClipboardEvent('paste', {
+              bubbles: true,
+              cancelable: true,
+              clipboardData,
+            }),
+          )
+        },
+        { bytes: [...pastedImage], image, name: pastedAttachment.name },
+      )
+    assert.equal(await paste(false), true, 'Native text paste is allowed')
+    await paste(true)
+    await dialog
+      .getByRole('alert')
+      .filter({ hasText: 'Trello rejected this image' })
+      .waitFor()
+    assert.equal(uploadRequests, 1, 'Only images are uploaded')
+    assert.equal(await markdownSource.inputValue(), descriptionDraft)
+    await paste(true)
+    await dialog
+      .getByRole('status')
+      .filter({ hasText: 'Uploading images' })
+      .waitFor()
+    assert.equal(
+      await dialog.getByRole('button', { name: 'Close card' }).isDisabled(),
+      true,
+    )
+    releaseAttachment.resolve()
+    const attachmentLink = dialog.getByRole('link', {
+      name: pastedAttachment.name,
+    })
+    await attachmentLink.waitFor()
+    assert.equal(
+      await attachmentLink.getAttribute('href'),
+      pastedAttachment.url,
+    )
+    assert.equal(await markdownSource.inputValue(), descriptionDraft)
+    await markdownSource.fill(previousDescription)
+    await dialog.getByRole('button', { name: 'Close card' }).click()
+    await dialog.waitFor({ state: 'detached' })
+    await badges
+      .getByRole('img', { exact: true, name: '2 attachments' })
+      .waitFor()
+    await cardButton.click()
+    await attachmentLink.waitFor()
+    await dialog.getByRole('button', { name: 'Close card' }).click()
+    await dialog.waitFor({ state: 'detached' })
+    process.stdout.write(
+      'Card image paste: native text paste, upload failure, retry, draft, badge and reopen: pass\n',
     )
     const draggedCard = page.locator(
       'button[name="board-card:aaaaaaaaaaaaaaaaaaaaaaaa"]',

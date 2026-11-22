@@ -16,8 +16,10 @@ import {
 } from './CardCache.ts'
 import {
   normalizeActivity,
+  normalizeAttachment,
   normalizeDetails,
   type CardActivity,
+  type CardAttachment,
   type CardDetails,
 } from './CardDetails.ts'
 import { loadDescriptionImages } from './DescriptionImages.ts'
@@ -399,6 +401,11 @@ const pickerCacheEntry = async (
 }
 
 export interface TrelloClient {
+  readonly addAttachment: (
+    id: string,
+    file: File,
+    signal: Readonly<AbortSignal>,
+  ) => Promise<CardAttachment>
   readonly addComment: (
     id: string,
     text: string,
@@ -608,10 +615,12 @@ export const createTrelloClient = (
     signal: Readonly<AbortSignal>,
     accessToken?: string,
     {
+      body,
       cache,
       mapError = boardError,
       method,
     }: Readonly<{
+      body?: Readonly<FormData>
       cache?: RequestCache
       method?: 'GET' | 'POST' | 'PUT'
       mapError?: (status: number) => BoardError
@@ -621,6 +630,7 @@ export const createTrelloClient = (
     signal.throwIfAborted()
     const url = new URL(`/1/${path}`, 'https://api.trello.com')
     const response = await request(url.href, {
+      ...(body && { body }),
       ...(cache && { cache }),
       credentials: 'omit',
       headers: { Authorization: `Bearer ${token}` },
@@ -791,6 +801,47 @@ export const createTrelloClient = (
         message: 'Unable to load card details. Try again.',
       })
     }
+  }
+  const addAttachment = async (
+    id: string,
+    file: File,
+    signal: Readonly<AbortSignal>,
+  ): Promise<CardAttachment> => {
+    if (!cardIdPattern.test(id)) {
+      throw new TrelloError({
+        code: 'TRELLO_INVALID_CARD',
+        message: 'This card could not be identified. Refresh the board.',
+      })
+    }
+    const body = new FormData()
+    body.set('file', file)
+    const data = await trelloRequest(
+      `cards/${id}/attachments?setCover=false`,
+      signal,
+      undefined,
+      {
+        body,
+        mapError: (status) => {
+          if (status === 400 || status === 413) {
+            return {
+              code: 'TRELLO_INVALID_ATTACHMENT',
+              message:
+                'Trello rejected this image. Check its format and size and try again.',
+            }
+          }
+          return boardError(status)
+        },
+        method: 'POST',
+      },
+    )
+    await invalidateCard(id)
+    const attachment = normalizeAttachment(Array.isArray(data) ? data[0] : data)
+    if (attachment) return attachment
+    throw new TrelloError({
+      code: 'TRELLO_INVALID_RESPONSE',
+      message:
+        'Trello accepted the upload. Reopen the card to check its attachments before retrying.',
+    })
   }
   const addComment = async (
     id: string,
@@ -1127,6 +1178,7 @@ export const createTrelloClient = (
     await invalidateCard(cardId)
   }
   return {
+    addAttachment,
     addComment,
     archiveCard,
     authorize,
