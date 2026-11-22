@@ -814,15 +814,20 @@ export const testBoardSelection = async (
     if (process.env.BOARD_DETAIL_SCREENSHOT)
       await page.screenshot({ path: process.env.BOARD_DETAIL_SCREENSHOT })
     await page.setViewportSize({ height: 844, width: 390 })
-    const narrowMain = await page.locator('.BoardDialogMain').boundingBox()
-    const narrowActivity = await page
-      .locator('.BoardDialogActivity')
-      .boundingBox()
+    // Read both sections in one layout snapshot because scroll anchoring
+    // can move both of them between separate browser calls.
+    const narrowLayout = await dialog.evaluate((element) => {
+      const main = element.querySelector('.BoardDialogMain')
+      const activity = element.querySelector('.BoardDialogActivity')
+      if (!main || !activity) return undefined
+      return {
+        activityTop: activity.getBoundingClientRect().top,
+        mainBottom: main.getBoundingClientRect().bottom,
+      }
+    })
     assert.ok(
-      narrowMain &&
-        narrowActivity &&
-        narrowActivity.y >= narrowMain.y + narrowMain.height - 1,
-      `Activity stacks below details on mobile (viewport=390x844, main=${JSON.stringify(narrowMain)}, activity=${JSON.stringify(narrowActivity)})`,
+      narrowLayout && narrowLayout.activityTop >= narrowLayout.mainBottom - 1,
+      `Activity stacks below details on mobile (viewport=390x844, layout=${JSON.stringify(narrowLayout)})`,
     )
     const panel = await page.locator('.BoardDialog').boundingBox()
     assert.ok(
