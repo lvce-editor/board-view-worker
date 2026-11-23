@@ -1,8 +1,9 @@
 import { packageExtension } from '@lvce-editor/package-extension'
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { extension } from './build-extension.ts'
+import { buildExtension, extension } from './build-extension.ts'
 
+await buildExtension(true)
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const dist = `${root}/dist`
 await rm(dist, { recursive: true, force: true })
