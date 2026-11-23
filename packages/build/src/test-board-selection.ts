@@ -235,8 +235,10 @@ export const testBoardSelection = async (
           boards: [{ id: '22222222', name: 'Engineering' }],
           cards: [
             {
+              board: { id: '22222222', name: 'Engineering' },
               id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
               idBoard: '22222222',
+              list: { id: 'todo', name: 'Todo' },
               name: 'Card with cover',
             },
           ],
@@ -565,7 +567,7 @@ export const testBoardSelection = async (
     const boardSearch = page.getByRole('searchbox', { name: 'Search boards' })
     await boardSearch.fill('cover')
     await page
-      .getByRole('button', { name: 'Card · Card with cover — Engineering' })
+      .getByRole('button', { name: 'Card with cover Engineering · Todo' })
       .waitFor()
     assert.equal(await page.locator('.BoardSearchResult').count(), 2)
     await page.locator('.BoardTitle').click()
@@ -573,10 +575,17 @@ export const testBoardSelection = async (
     assert.equal(await boardSearch.inputValue(), 'cover')
     await boardSearch.click()
     await page
-      .getByRole('button', { name: 'Card · Card with cover — Engineering' })
+      .getByRole('button', { name: 'Card with cover Engineering · Todo' })
       .waitFor()
     await boardSearch.press('Tab')
-    await page.getByRole('button', { name: 'Board · Engineering' }).waitFor()
+    const boardResult = page
+      .getByRole('group', { name: 'Boards' })
+      .getByRole('button', { exact: true, name: 'Engineering' })
+    assert.ok(
+      await boardResult.evaluate((element) =>
+        element.matches(':focus-visible'),
+      ),
+    )
     assert.equal(await page.locator('.BoardSearchResult').count(), 2)
     await page.keyboard.press('Enter')
     await page
@@ -1361,9 +1370,21 @@ export const testBoardSelection = async (
     )
     await boardSearch.fill('cover')
     await page
-      .getByRole('button', { name: 'Card · Card with cover — Engineering' })
+      .getByRole('button', { name: 'Card with cover Engineering · Todo' })
       .waitFor()
     const searchResults = page.locator('.BoardSearchResults')
+    const cardSuggestion = searchResults
+      .getByRole('group', { name: 'Cards' })
+      .getByRole('button', { name: 'Card with cover Engineering · Todo' })
+    assert.equal(
+      await cardSuggestion.locator('.BoardSearchResultTitle').innerText(),
+      'Card with cover',
+    )
+    assert.equal(
+      await cardSuggestion.locator('.BoardSearchResultContext').innerText(),
+      'Engineering · Todo',
+    )
+    assert.ok(await cardSuggestion.locator('.BoardSearchCardIcon').isVisible())
     const toolbar = page.locator('.BoardToolbar')
     for (const width of [390, 601, 1280]) {
       await page.setViewportSize({ height: 844, width })
@@ -1446,7 +1467,7 @@ export const testBoardSelection = async (
     // Search from a different board and open the copied card URL in a new tab.
     await boardSearch.fill('cover')
     const cardResult = page.getByRole('button', {
-      name: 'Card · Card with cover — Engineering',
+      name: 'Card with cover Engineering · Todo',
     })
     await cardResult.click()
     await page.waitForURL((url) => url.hash === cardHash)

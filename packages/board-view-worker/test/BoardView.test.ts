@@ -323,6 +323,7 @@ test('searches Trello cards remotely and opens the owning board and card', async
       boardName: 'Personal',
       id: cardId,
       kind: 'card',
+      listName: 'Next up',
       name: 'Chat task',
     },
   ])
@@ -340,9 +341,9 @@ test('searches Trello cards remotely and opens the owning board and card', async
   })
   await new Promise((resolve) => setTimeout(resolve, 300))
   await flush()
-  expect(JSON.stringify(await view.render())).toContain(
-    'Card · Chat task — Personal',
-  )
+  const results = JSON.stringify(await view.render())
+  expect(results).toContain('Chat task')
+  expect(results).toContain('Personal · Next up')
   await view.handleEvent?.({ name: 'board-search', type: 'blur' })
   await view.handleEvent?.({
     name: `board-search-card:${cardId}`,

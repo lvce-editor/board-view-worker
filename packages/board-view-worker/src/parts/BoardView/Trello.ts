@@ -62,6 +62,7 @@ export interface TrelloSearchResult {
   readonly boardName?: string
   readonly id: string
   readonly kind: 'board' | 'card'
+  readonly listName?: string
   readonly name: string
 }
 
@@ -1060,7 +1061,9 @@ export const createTrelloClient = (
         `search?${new URLSearchParams({
           board_fields: 'name,shortLink',
           boards_limit: '10',
+          card_board: 'true',
           card_fields: 'name,idBoard,idList,closed',
+          card_list: 'true',
           cards_limit: '20',
           modelTypes: 'boards,cards',
           partial: 'true',
@@ -1094,6 +1097,7 @@ export const createTrelloClient = (
         )
           return []
         const board = isRecord(item.board) ? item.board : undefined
+        const list = isRecord(item.list) ? item.list : undefined
         const directBoardId = item.idBoard
         const nestedBoardId = board?.id
         let boardId: string | undefined
@@ -1114,6 +1118,7 @@ export const createTrelloClient = (
             boardName: typeof board?.name === 'string' ? board.name : '',
             id: item.id,
             kind: 'card' as const,
+            ...(typeof list?.name === 'string' && { listName: list.name }),
             name: item.name,
           },
         ]
