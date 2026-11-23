@@ -1398,6 +1398,19 @@ export const testBoardSelection = async (
           bounds.x + bounds.width <= toolbarBounds.x + toolbarBounds.width,
         `Search results fit in a ${width}px viewport`,
       )
+      if (width > 600) {
+        const searchBounds = await boardSearch.boundingBox()
+        assert.ok(searchBounds)
+        const toolbarCenter = toolbarBounds.x + toolbarBounds.width / 2
+        assert.ok(
+          Math.abs(searchBounds.x + searchBounds.width / 2 - toolbarCenter) < 1,
+          `Search input is centered in a ${width}px viewport`,
+        )
+        assert.ok(
+          Math.abs(bounds.x + bounds.width / 2 - toolbarCenter) < 1,
+          `Search results are centered in a ${width}px viewport`,
+        )
+      }
     }
     const gradientIcon = await readBoardIcon()
     assert.ok(gradientIcon.includes('stop-color="#a82be0"'))

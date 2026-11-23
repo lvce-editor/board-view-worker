@@ -36,7 +36,10 @@
 .BoardToolbar {
   container-type: inline-size;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, min(38vw, 380px)) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, min(38vw, 380px)) minmax(
+      0,
+      1fr
+    );
   align-items: center;
   gap: 16px;
   padding: 16px 24px;
@@ -437,8 +440,10 @@
   }
 }
 .BoardToolbar .BoardSearchResults {
-  inset-inline: auto 0;
+  inset-inline: auto;
+  left: 50%;
   width: min(640px, calc(100cqw - 64px));
+  translate: -50%;
 }
 .BoardRemembered {
   display: grid;
@@ -922,6 +927,7 @@
   .BoardToolbar .BoardSearchResults {
     inset-inline: 0 auto;
     width: min(520px, 100cqw);
+    translate: none;
   }
   .BoardOverflow {
     grid-column: 2;
