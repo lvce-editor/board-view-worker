@@ -24,7 +24,7 @@ jobs:
       - run: npm test
       - run: npm run type-check
       - run: npm run lint
-      - run: npx playwright install chromium --with-deps
+      - run: npm run install:chromium --workspace=@lvce-editor/board-view-build -- --with-deps
       - run: npm run e2e:headless
       - run: npm run check:package
       - run: npm run knip
