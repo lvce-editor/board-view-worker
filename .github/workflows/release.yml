@@ -42,7 +42,7 @@ jobs:
       - run: npm test
       - run: npm run type-check
       - run: npm run lint
-      - run: npx playwright install chromium --with-deps
+      - run: npm exec --workspace=@lvce-editor/board-view-build -- playwright install chromium --with-deps
       - run: npm run e2e:headless
       - run: npm run check:package
       - uses: actions/upload-artifact@v6

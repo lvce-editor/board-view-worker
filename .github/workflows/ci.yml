@@ -28,7 +28,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run check:package
-      - run: npx playwright install chromium --with-deps
+      - run: npm exec --workspace=@lvce-editor/board-view-build -- playwright install chromium --with-deps
       - run: npm run e2e:headless
       - run: npm run build:static
       - run: npm test
