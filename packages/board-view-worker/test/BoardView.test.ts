@@ -144,6 +144,50 @@ const flush = async (): Promise<void> => {
   await new Promise<void>((resolve) => setImmediate(resolve))
 }
 
+test('polls the open board, recovers from failure and discards a response after disposal', async () => {
+  jest.useFakeTimers({ doNotFake: ['setImmediate'] })
+  const host = createHost()
+  const context = createContext()
+  const id = '5k8NLHLh'
+  const updated = {
+    ...board,
+    cards: [
+      {
+        ...board.cards[0],
+        coverDataUrl: 'data:image/png;base64,AQID',
+        idList: 'empty',
+        name: 'External edit',
+      },
+    ],
+  }
+  const pending = Promise.withResolvers<TrelloBoard>()
+  jest
+    .mocked(host.load)
+    .mockRejectedValueOnce(new Error('Offline'))
+    .mockResolvedValueOnce(updated)
+    .mockReturnValueOnce(pending.promise)
+  jest.mocked(host.read).mockResolvedValue([id])
+  host.session.set(id, { board })
+  const view = await createInstance(context, host)
+  try {
+    await jest.advanceTimersByTimeAsync(15_000)
+    expect(host.session.get(id)?.board).toBe(board)
+    await jest.advanceTimersByTimeAsync(15_000)
+    expect(host.session.get(id)?.board.cards[0]).toEqual(updated.cards[0])
+    expect(JSON.stringify(await view.render())).toContain('External edit')
+    await jest.advanceTimersByTimeAsync(15_000)
+    const signal = jest.mocked(host.load).mock.lastCall?.[1]
+    view.dispose?.()
+    expect(signal?.aborted).toBe(true)
+    pending.resolve(board)
+    await jest.advanceTimersByTimeAsync(30_000)
+    expect(host.session.get(id)?.board.cards[0]).toEqual(updated.cards[0])
+    expect(host.load).toHaveBeenCalledTimes(3)
+  } finally {
+    jest.useRealTimers()
+  }
+})
+
 const boardTile = async (
   view: VirtualDomViewInstance,
   id: string,

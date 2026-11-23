@@ -38,6 +38,7 @@ const connectionsPreference = 'chat2.connectedBoardIds'
 const hostedBoardUrl = 'https://lvce-editor.github.io/board-view-worker/boards/'
 const hostedBoardPath = new URL(hostedBoardUrl).pathname
 const hostedHomePath = new URL('..', hostedBoardUrl).pathname
+const boardRefreshInterval = 15_000
 
 const isCardTitleBlur = (event: Readonly<ViewEvent>): boolean =>
   event.type === 'blur' && event.name === 'board-card-title'
@@ -253,6 +254,8 @@ export const createInstance = async (
   }
   let generation = 0
   let controller: AbortController | undefined
+  let boardRefreshController: AbortController | undefined
+  let boardRefreshTimer: ReturnType<typeof setTimeout> | undefined
   let detailsController: AbortController | undefined
   let faviconController: AbortController | undefined
   let searchController: AbortController | undefined
@@ -376,6 +379,7 @@ export const createInstance = async (
     cardSave = undefined
     cancelCardPrefetch()
     controller?.abort()
+    boardRefreshController?.abort()
     detailsController?.abort()
     faviconController?.abort()
     cardMutationController?.abort()
@@ -1543,6 +1547,102 @@ export const createInstance = async (
     }
     void loadCardDetails(loadPrefetched)
   }
+  const canRefreshBoard = ({
+    accountConnected,
+    board,
+    cardAction,
+    cardDraft,
+    commentDraft,
+    detailsLoading,
+    draggedCardId,
+    editDescription,
+    editError,
+    editingTitle,
+    loading,
+    postingComment,
+    savingCard,
+  }: BoardState): boolean =>
+    Boolean(
+      accountConnected &&
+      board &&
+      !cardAction &&
+      !cardDraft?.saving &&
+      !commentDraft &&
+      !detailsLoading &&
+      !draggedCardId &&
+      !editDescription &&
+      !editError &&
+      !editingTitle &&
+      !loading &&
+      !postingComment &&
+      !savingCard,
+    )
+  const refreshBoard = async (): Promise<void> => {
+    const { board, boardId } = state
+    if (disposed || !board || !canRefreshBoard(state)) return
+    const requestController = new AbortController()
+    boardRefreshController = requestController
+    const { signal } = requestController
+    const fresh = await host.load(boardId, signal)
+    const { board: currentBoard } = state
+    // Local writes replace the board. A request started before one of
+    // those writes must not undo it, even if the write has already finished.
+    if (signal.aborted || currentBoard !== board || !canRefreshBoard(state))
+      return
+    const previousById = new Map(board.cards.map((card) => [card.id, card]))
+    const cards = fresh.cards.map((card) => {
+      const previous = previousById.get(card.id)
+      const { coverDataUrl: incomingCover, ...fields } = card
+      const coverDataUrl = incomingCover ?? previous?.coverDataUrl
+      if (previous) {
+        const { coverDataUrl: previousCover, ...previousFields } = previous
+        if (
+          coverDataUrl === previousCover &&
+          JSON.stringify(fields) === JSON.stringify(previousFields)
+        )
+          return previous
+      }
+      return coverDataUrl ? { ...card, coverDataUrl } : card
+    })
+    if (
+      cards.length === board.cards.length &&
+      cards.every((card, index) => card === board.cards[index]) &&
+      JSON.stringify(fresh.lists) === JSON.stringify(board.lists)
+    )
+      return
+    const updated = { ...board, cards, lists: fresh.lists }
+    host.session.set(boardId, { board: updated })
+    state = { ...state, board: updated }
+    const { details, editingCard } = state
+    if (editingCard) {
+      const card = cards.find(({ id }) => id === editingCard.id)
+      if (card) {
+        state = { ...state, editingCard: card, editName: card.name }
+        if (details && card.desc !== previousById.get(card.id)?.desc) {
+          showDetails({ ...details, desc: card.desc }, false)
+          return
+        }
+      } else {
+        detailsController?.abort()
+        closeEditor()
+      }
+    }
+    await notify()
+  }
+  const scheduleBoardRefresh = (): void => {
+    if (disposed) return
+    boardRefreshTimer = setTimeout(() => {
+      void refreshBoard()
+        .catch(() => {
+          // Keep the current board during a transient background failure.
+        })
+        .finally(() => {
+          boardRefreshController = undefined
+          scheduleBoardRefresh()
+        })
+    }, boardRefreshInterval)
+    boardRefreshTimer.unref?.()
+  }
   const openCard = (id: string): void => {
     const { board, savingCard } = state
     const card = board?.cards.find((item) => item.id === id)
@@ -1816,6 +1916,7 @@ export const createInstance = async (
   const instance: BoardViewInstance = {
     dispose(): void {
       disposed = true
+      clearTimeout(boardRefreshTimer)
       descriptionGeneration++
       pendingDescriptionKey = undefined
       cancel()
@@ -2004,6 +2105,7 @@ export const createInstance = async (
     else void syncBoardHash()
   }
   restoreInitialBoard()
+  scheduleBoardRefresh()
   return instance
 }
 
