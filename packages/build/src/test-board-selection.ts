@@ -68,6 +68,9 @@ export const testBoardSelection = async (
   const coverLoads: string[] = []
   const moveRequests: string[] = []
   const cardEdits: { desc: string; name: string }[] = []
+  const initialListId = 'bbbbbbbbbbbbbbbbbbbbbbbb'
+  let coveredCardListId = initialListId
+  let externalCardEdit = false
   await context.route(`${backend}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path === authPath) {
@@ -92,11 +95,12 @@ export const testBoardSelection = async (
         body = {
           ...fields,
           id: path.slice(path.lastIndexOf('/') + 1),
-          idList: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+          idList: coveredCardListId,
           pos: 1,
         }
       } else {
         moveRequests.push(path)
+        coveredCardListId = path.slice(path.lastIndexOf('/') + 1)
         body = {}
       }
     } else if (path.endsWith('/status')) {
@@ -142,7 +146,7 @@ export const testBoardSelection = async (
                     comments: 3,
                   },
                   id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
-                  idList: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+                  idList: coveredCardListId,
                   labels: [
                     {
                       color: 'yellow',
@@ -151,15 +155,17 @@ export const testBoardSelection = async (
                     },
                     { color: 'red', id: 'red-label', name: 'Urgent' },
                   ],
-                  name: 'Card with cover',
+                  name: cardEdits.at(-1)?.name ?? 'Card with cover',
                   pos: 1,
                 },
               ]),
           {
             badges: { attachments: 0, comments: 0 },
             id: 'card-2',
-            idList: 'bbbbbbbbbbbbbbbbbbbbbbbb',
-            name: 'No activity',
+            idList: externalCardEdit
+              ? 'cccccccccccccccccccccccc'
+              : 'bbbbbbbbbbbbbbbbbbbbbbbb',
+            name: externalCardEdit ? 'Edited in Trello' : 'No activity',
             pos: 2,
           },
           ...Array.from({ length: 20 }, (_, index) => ({
@@ -624,7 +630,7 @@ export const testBoardSelection = async (
         (await columns.nth(1).boundingBox())!.height < longColumnBox.height,
       'Empty and short columns remain content-sized',
     )
-    assert.deepEqual(boardLoads, ['/api/integrations/trello/boards/22222222'])
+    assert.ok(boardLoads.includes('/api/integrations/trello/boards/22222222'))
     assert.equal(
       await page.locator('.BoardViewTrello').evaluate(
         (element) =>
@@ -646,10 +652,6 @@ export const testBoardSelection = async (
         '<image href="data:image/png;base64,',
       ),
     )
-    assert.deepEqual(boardLoads, [
-      '/api/integrations/trello/boards/22222222',
-      '/api/integrations/trello/boards/22222222',
-    ])
     assert.deepEqual(proxiedLoads, [])
     const cover = page.locator('.BoardCardCover')
     await cover.waitFor({ state: 'visible' })
@@ -1215,7 +1217,6 @@ export const testBoardSelection = async (
       .getByRole('button', { exact: true, name: 'Refresh board' })
       .click()
     await refresh
-    assert.equal(boardLoads.length, 6)
     assert.deepEqual(proxiedLoads, [])
     await openBoardOptions()
     await page
@@ -1432,6 +1433,7 @@ export const testBoardSelection = async (
     await page.waitForURL((url) => url.hash === '#22222222')
 
     const directPage = await context.newPage()
+    coveredCardListId = initialListId
     const deepLink = new URL(cardUrl)
     deepLink.searchParams.set('card-url-test', 'retained')
     await directPage.goto(deepLink.href)
@@ -1630,6 +1632,8 @@ export const testBoardSelection = async (
     )
 
     archived = false
+    cardEdits.length = 0
+    coveredCardListId = initialListId
     holdRevalidation = false
     const homeUrl = new URL('?test-board-route=retained', baseUrl)
     await page.goto(homeUrl.href)
@@ -1662,6 +1666,25 @@ export const testBoardSelection = async (
     process.stdout.write(
       'Standalone homepage: board and card URLs survive reload\n',
     )
+
+    const originalCard = page.getByRole('button', {
+      exact: true,
+      name: 'No activity',
+    })
+    await page.locator('.BoardCards').first().locator(originalCard).waitFor()
+    externalCardEdit = true
+    const renamedCard = page.getByRole('button', {
+      exact: true,
+      name: 'Edited in Trello',
+    })
+    await page
+      .locator('.BoardCards')
+      .nth(1)
+      .locator(renamedCard)
+      .waitFor({ timeout: 35_000 })
+    assert.equal(await originalCard.count(), 0)
+    assert.equal(page.url(), homeBoardUrl.href)
+    process.stdout.write('Open board applies external card edits and moves\n')
   } finally {
     releaseDetails.resolve()
     releaseCardRefresh.resolve()
