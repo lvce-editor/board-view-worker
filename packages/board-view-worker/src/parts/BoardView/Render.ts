@@ -51,6 +51,7 @@ export interface BoardState {
   readonly commentDraft?: string | undefined
   readonly commentError?: string | undefined
   readonly connectedIds: readonly string[]
+  readonly connectedNames: Readonly<Record<string, string>>
   readonly coverConnectionRequired?: boolean
   readonly descriptionError?: string | undefined
   readonly descriptionRendering?: boolean
@@ -417,10 +418,17 @@ const renderConnection = (state: BoardState): readonly Dom.Node[] => {
       ]
 }
 const renderSetup = (state: BoardState): Dom.Node => {
-  const { boards, connectedIds, loading, providerSelected, searchQuery } = state
+  const {
+    boards,
+    connectedIds,
+    connectedNames,
+    loading,
+    providerSelected,
+    searchQuery,
+  } = state
   const showProviderGrid = !providerSelected
   const rememberedIds = connectedIds.filter((id) =>
-    boards.every((board) => board.id !== id),
+    boards.every((board) => board.id !== id && board.fullId !== id),
   )
   return Dom.div('BoardSetup', [
     Dom.heading(2, 'BoardSetupTitle', 'Connect a board'),
@@ -451,14 +459,12 @@ const renderSetup = (state: BoardState): Dom.Node => {
                 Dom.div('BoardRemembered', [
                   Dom.heading(3, 'BoardRememberedTitle', 'Remembered boards'),
                   ...rememberedIds.map((id) => {
-                    const board = boards.find((item) => item.id === id)
-                    return board
-                      ? renderBoardTile({ ...board, id }, loading)
-                      : renderBoardTile(
-                          { id, name: id },
-                          loading,
-                          `Open remembered board ${id}`,
-                        )
+                    const name = connectedNames[id] ?? id
+                    return renderBoardTile(
+                      { id, name },
+                      loading,
+                      `Open remembered board ${name}`,
+                    )
                   }),
                 ]),
               ]

@@ -28,6 +28,7 @@ import {
   parseBoardId,
   TrelloError,
   type TrelloBoard,
+  type TrelloBoardSummary,
   type TrelloCard,
   type TrelloList,
   type TrelloReturnTarget,
@@ -35,6 +36,7 @@ import {
 
 export const viewId = 'chat2.views.board'
 const connectionsPreference = 'chat2.connectedBoardIds'
+const connectionNamesPreference = 'chat2.connectedBoardNames'
 const hostedBoardUrl = 'https://lvce-editor.github.io/board-view-worker/boards/'
 const hostedBoardPath = new URL(hostedBoardUrl).pathname
 const hostedHomePath = new URL('..', hostedBoardUrl).pathname
@@ -205,20 +207,47 @@ const getProviderAction = (
   return undefined
 }
 
-export const createInstance = async (
-  context?: ViewContext,
-  host: BoardHost = defaultHost,
-): Promise<BoardViewInstance> => {
-  let connectedIds: readonly string[] = []
+const readConnectedIds = async (
+  read: BoardHost['read'],
+): Promise<readonly string[]> => {
   try {
-    const saved: unknown = await host.read(connectionsPreference)
+    const saved = await read(connectionsPreference)
     if (Array.isArray(saved))
-      connectedIds = saved.filter(
+      return saved.filter(
         (id): id is string => typeof id === 'string' && boardIdPattern.test(id),
       )
   } catch {
     // The connection form remains usable when settings cannot be read.
   }
+  return []
+}
+
+const readConnectedNames = async (
+  read: BoardHost['read'],
+  ids: readonly string[],
+): Promise<Readonly<Record<string, string>>> => {
+  const names: Record<string, string> = {}
+  try {
+    const saved = await read(connectionNamesPreference)
+    if (typeof saved === 'object' && saved !== null) {
+      for (const [id, name] of Object.entries(saved)) {
+        if (!ids.includes(id) || typeof name !== 'string' || !name.trim())
+          continue
+        names[id] = name
+      }
+    }
+  } catch {
+    // Boards without a saved name can still be opened by ID.
+  }
+  return names
+}
+
+export const createInstance = async (
+  context?: ViewContext,
+  host: BoardHost = defaultHost,
+): Promise<BoardViewInstance> => {
+  const connectedIds = await readConnectedIds(host.read)
+  const connectedNames = await readConnectedNames(host.read, connectedIds)
   const savedState = context?.state
   const href = await getHrefFromHost(host)
   const boardHash = parseBoardHash(href)
@@ -248,6 +277,7 @@ export const createInstance = async (
     boardId: initialId,
     boards: [],
     connectedIds,
+    connectedNames,
     error: undefined,
     loading: false,
     providerSelected: false,
@@ -268,6 +298,41 @@ export const createInstance = async (
   let cardMutationController: AbortController | undefined
   let cardPrefetch: CardPrefetch | undefined
   let disposed = false
+  let preferenceWrite = Promise.resolve(true)
+  const saveBoardPreferences = (ids?: readonly string[]): Promise<boolean> => {
+    const { connectedNames } = state
+    const write = async (
+      previous: Readonly<Promise<boolean>>,
+    ): Promise<boolean> => {
+      await previous
+      try {
+        if (ids) await host.write(connectionsPreference, ids)
+        await host.write(connectionNamesPreference, connectedNames)
+        return true
+      } catch {
+        return false
+      }
+    }
+    preferenceWrite = write(preferenceWrite)
+    return preferenceWrite
+  }
+  const rememberBoardNames = (
+    boards: readonly TrelloBoardSummary[],
+  ): boolean => {
+    const { connectedIds, connectedNames } = state
+    const names = { ...connectedNames }
+    let changed = false
+    for (const key of connectedIds) {
+      const name = boards.find(
+        ({ fullId, id }) => id === key || fullId === key,
+      )?.name
+      if (!name?.trim() || names[key] === name) continue
+      names[key] = name
+      changed = true
+    }
+    if (changed) state = { ...state, connectedNames: names }
+    return changed
+  }
   const syncFavicon = async (faviconUrl: string): Promise<void> => {
     try {
       await host.execute('WindowTitle.setFavicon', faviconUrl)
@@ -537,21 +602,21 @@ export const createInstance = async (
         coverConnectionRequired: false,
         loading: false,
       }
+      rememberBoardNames([{ fullId: board.id, id, name: board.name }])
+      const saved = saveBoardPreferences(ids)
       if (card) showCard(card)
       await notify()
       void loadBoardCovers(id, signal, requestGeneration)
       await syncTab(board.name, board.faviconUrl)
       refreshFavicon(id, board, requestGeneration)
-      try {
-        await host.write(connectionsPreference, ids)
-      } catch {
+      if (!(await saved)) {
         if (disposed || requestGeneration !== generation) return
         state = {
           ...state,
           error: {
             code: 'BOARD_SETTINGS_FAILED',
             message:
-              'The board is connected, but its ID could not be saved. Reconnect it next time.',
+              'The board is connected, but its details could not be saved. Reconnect it next time.',
           },
         }
       }
@@ -925,24 +990,30 @@ export const createInstance = async (
   }
   const disconnect = async (): Promise<void> => {
     cancel()
-    const { boardId, connectedIds } = state
-    await setBoardHash(host, '')
-    await syncTab('Boards')
+    const requestGeneration = generation
+    const { boardId, connectedIds, connectedNames } = state
     host.session.remove(boardId)
     const ids = connectedIds.filter((id) => id !== boardId)
+    const names = Object.fromEntries(
+      Object.entries(connectedNames).filter(
+        ([id]: readonly [string, string]) => id !== boardId,
+      ),
+    )
     state = {
       ...state,
       board: undefined,
       boardId: '',
       connectedIds: ids,
+      connectedNames: names,
       error: undefined,
       loading: false,
       providerSelected: false,
       searchQuery: '',
     }
-    try {
-      await host.write(connectionsPreference, ids)
-    } catch {
+    const saved = saveBoardPreferences(ids)
+    await setBoardHash(host, '')
+    await syncTab('Boards')
+    if (!(await saved) && !disposed && requestGeneration === generation) {
       state = {
         ...state,
         error: {
@@ -989,6 +1060,7 @@ export const createInstance = async (
     if (disposed || generation !== requestGeneration) return
     const boards = await host.boards(signal)
     if (disposed || generation !== requestGeneration) return
+    if (rememberBoardNames(boards)) void saveBoardPreferences()
     const { boardId } = state
     state = {
       ...state,

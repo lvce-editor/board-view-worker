@@ -424,6 +424,7 @@ test('discovers board names and background preferences directly from Trello', as
     },
     {
       backgroundImage: 'data:image/jpeg;base64,AQID',
+      fullId: '222222221111111133333333',
       id: '22222222',
       name: 'Zebra',
     },

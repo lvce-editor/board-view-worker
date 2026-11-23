@@ -234,6 +234,9 @@ test('shows setup, renders empty lists and saves only board IDs', async () => {
   expect(host.write).toHaveBeenCalledWith('chat2.connectedBoardIds', [
     '5k8NLHLh',
   ])
+  expect(host.write).toHaveBeenCalledWith('chat2.connectedBoardNames', {
+    '5k8NLHLh': 'Work',
+  })
   await view.handleEvent?.({ name: 'board-change', type: 'click' })
   expect(JSON.stringify(await view.render())).not.toContain('BoardViewTrello')
   expect(JSON.stringify(await view.render())).toContain('Connect Trello')
@@ -338,11 +341,13 @@ test('keeps board actions in an accessible, keyboard-dismissible overflow menu',
 
 test('matches remembered short IDs with board summaries after reload', async () => {
   const host = createHost()
-  jest.mocked(host.read).mockResolvedValue(['5k8NLHLh'])
+  const fullId = '677af2a97a77d55c7ffd7bd9'
+  jest.mocked(host.read).mockResolvedValue(['5k8NLHLh', fullId])
   jest.mocked(host.boards).mockResolvedValue([
     {
       backgroundColor: '#ff58b0',
       backgroundGradient: 'linear-gradient(135deg, #a82be0, #ff58b0)',
+      fullId,
       id: '5k8NLHLh',
       name: 'Lvce Editor',
     },
@@ -352,6 +357,11 @@ test('matches remembered short IDs with board summaries after reload', async () 
   const beforeOpen = JSON.stringify(await view.render())
   expect(beforeOpen).toContain('Lvce Editor')
   expect(beforeOpen).toContain('linear-gradient(135deg, #a82be0, #ff58b0)')
+  expect(beforeOpen).not.toContain('Remembered boards')
+  expect(host.write).toHaveBeenCalledWith('chat2.connectedBoardNames', {
+    '5k8NLHLh': 'Lvce Editor',
+    [fullId]: 'Lvce Editor',
+  })
   await view.handleEvent?.({ name: 'board-select:5k8NLHLh', type: 'click' })
   await flush()
   expect(host.load).toHaveBeenCalledWith('5k8NLHLh', expect.any(AbortSignal))
@@ -504,7 +514,10 @@ test('stale completion and disposed requests cannot replace current state', asyn
   await flush()
   expect(JSON.stringify(await view.render())).toContain('Current')
   expect(JSON.stringify(await view.render())).not.toContain('Stale')
-  expect(host.write).toHaveBeenCalledTimes(1)
+  expect(jest.mocked(host.write).mock.calls).toEqual([
+    ['chat2.connectedBoardIds', ['22222222']],
+    ['chat2.connectedBoardNames', { '22222222': 'Current' }],
+  ])
   expect(jest.mocked(host.load).mock.calls[0]?.[1].aborted).toBe(true)
   const pending = Promise.withResolvers<TrelloBoard>()
   jest.mocked(host.load).mockReturnValueOnce(pending.promise)
@@ -575,7 +588,8 @@ test('restores remembered IDs, never credentials, and disconnects', async () => 
   await view.handleEvent?.({ name: 'board-connect', type: 'submit' })
   await flush()
   await view.handleEvent?.({ name: 'board-disconnect', type: 'click' })
-  expect(host.write).toHaveBeenLastCalledWith('chat2.connectedBoardIds', [])
+  expect(host.write).toHaveBeenCalledWith('chat2.connectedBoardIds', [])
+  expect(host.write).toHaveBeenLastCalledWith('chat2.connectedBoardNames', {})
   expect(JSON.stringify(await view.render())).toContain('Connect Trello')
 })
 
@@ -600,6 +614,7 @@ test('groups cards without dropping empty columns', () => {
     boardId: '5k8NLHLh',
     boards: [],
     connectedIds: [],
+    connectedNames: {},
     error: undefined,
     loading: false,
     providerSelected: false,
@@ -836,7 +851,8 @@ test('keeps connected boards across layout changes without saving credentials', 
   await flush()
   expect(host.load).toHaveBeenLastCalledWith('5k8NLHLh', expect.anything())
   await restored.handleEvent?.({ name: 'board-disconnect', type: 'click' })
-  expect(host.write).toHaveBeenLastCalledWith('chat2.connectedBoardIds', [])
+  expect(host.write).toHaveBeenCalledWith('chat2.connectedBoardIds', [])
+  expect(host.write).toHaveBeenLastCalledWith('chat2.connectedBoardNames', {})
   expect(host.session.get('5k8NLHLh')).toBeUndefined()
 })
 
@@ -966,6 +982,38 @@ test('opens remembered boards after reload without requesting Trello credentials
   await flush()
   expect(JSON.stringify(await view.render())).toContain('A task')
   expect(host.load).toHaveBeenCalledWith('5k8NLHLh', expect.anything())
+})
+
+test('shows saved names for remembered boards when Trello is disconnected', async () => {
+  const host = createHost()
+  jest.mocked(host.read).mockImplementation(async (key) =>
+    key === 'chat2.connectedBoardIds'
+      ? ['5k8NLHLh', '22222222']
+      : {
+          '22222222': null,
+          '33333333': 'Forgotten',
+          '5k8NLHLh': 'Engineering',
+        },
+  )
+  jest
+    .mocked(host.status)
+    .mockResolvedValue({ configured: true, connected: false })
+  const view = await createInstance(createContext(), host)
+  await flush()
+  await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
+  await flush()
+  expect(await boardTile(view, '5k8NLHLh')).toMatchObject({
+    ariaLabel: 'Open remembered board Engineering',
+    disabled: false,
+  })
+  expect(await boardTile(view, '22222222')).toMatchObject({
+    ariaLabel: 'Open remembered board 22222222',
+  })
+  const dom = JSON.stringify(await view.render())
+  expect(dom).toContain('"text":"Engineering"')
+  expect(dom).not.toContain('Forgotten')
+  expect(host.boards).not.toHaveBeenCalled()
+  view.dispose?.()
 })
 
 test('discovers named boards and opens a board tile directly', async () => {
