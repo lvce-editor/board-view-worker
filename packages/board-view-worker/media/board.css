@@ -712,6 +712,14 @@
   text-underline-offset: 3px;
   overflow-wrap: anywhere;
 }
+.BoardAttachmentPreview {
+  display: block;
+  max-width: min(100%, 300px);
+  max-height: 180px;
+  margin-bottom: 6px;
+  border-radius: 4px;
+  object-fit: contain;
+}
 .BoardActivity {
   padding-block: 16px 20px;
   border-bottom: 1px solid var(--BoardBorder);

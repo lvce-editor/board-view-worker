@@ -58,7 +58,12 @@ export const div = (
   )
 }
 
-export const link = (href: string, label: string, className: string): Node => {
+export const link = (
+  href: string,
+  label: string,
+  className: string,
+  prefix: readonly Node[] = [],
+): Node => {
   return node(
     VirtualDomElements.A,
     {
@@ -68,7 +73,7 @@ export const link = (href: string, label: string, className: string): Node => {
       target: '_blank',
       title: href,
     },
-    [textNode(label)],
+    [...prefix, textNode(label)],
   )
 }
 

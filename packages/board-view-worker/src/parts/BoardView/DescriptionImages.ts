@@ -12,13 +12,13 @@ import {
 } from './CardCache.ts'
 
 const trelloAttachmentPath =
-  /^\/1\/cards\/[\da-f]{24}\/attachments\/[\da-f]{24}\/(?:previews\/[\da-f]{24}\/)?download\//u
-const imageMimePattern =
+  /^\/1\/cards\/[\da-f]{24}\/attachments\/[\da-f]{24}\/(?:previews\/[\da-f]{24}\/)?download(?:\/|$)/u
+export const imageMimePattern =
   /^image\/(?:png|jpeg|webp|avif|gif|bmp|x-icon|vnd\.microsoft\.icon)$/u
 const imageByteLimit = 8 * 1024 * 1024
 const previewHeightLimit = 420
 
-const trelloImageUrl = (source: string): string | undefined => {
+export const trelloImageUrl = (source: string): string | undefined => {
   const url = URL.parse(source)
   if (
     !url ||
@@ -62,16 +62,12 @@ interface PreparedImage {
   readonly style: string
 }
 
-const prepareImage = async (
+export const loadImage = async (
   src: string,
   getToken: () => Promise<string>,
   signal: Readonly<AbortSignal>,
   request: typeof fetch,
-): Promise<PreparedImage> => {
-  const fallback = {
-    src,
-    style: 'width:100%;height:min(240px,45vh)',
-  }
+): Promise<PreparedImage | undefined> => {
   try {
     const downloadUrl = trelloImageUrl(src)
     const token = downloadUrl ? await getToken() : ''
@@ -90,9 +86,9 @@ const prepareImage = async (
       }))
     const mime = response.headers.get('content-type')?.split(';', 1)[0]
     if (!response.ok || !response.body || !mime || !imageMimePattern.test(mime))
-      return fallback
+      return undefined
     const blob = await readImage(response.body, mime)
-    if (!blob) return fallback
+    if (!blob) return undefined
     const bitmap = await createImageBitmap(blob)
     const { height, width } = bitmap
     bitmap.close()
@@ -112,7 +108,7 @@ const prepareImage = async (
       style: `width:min(100%,${fittedWidth}px);aspect-ratio:${width} / ${height}`,
     }
   } catch {
-    return fallback
+    return undefined
   }
 }
 
@@ -122,7 +118,7 @@ export const loadDescriptionImages = async (
   signal: Readonly<AbortSignal>,
   request: typeof fetch,
 ): Promise<Node> => {
-  const images = new Map<string, Promise<PreparedImage>>()
+  const images = new Map<string, Promise<PreparedImage | undefined>>()
   return Promise.all(
     markdown.map(async (node): Promise<VirtualDomNode> => {
       if (
@@ -133,10 +129,14 @@ export const loadDescriptionImages = async (
       const { src } = node
       let image = images.get(src)
       if (!image) {
-        image = prepareImage(src, getToken, signal, request)
+        image = loadImage(src, getToken, signal, request)
         images.set(src, image)
       }
-      return { ...node, ...(await image) }
+      return {
+        ...node,
+        style: 'width:100%;height:min(240px,45vh)',
+        ...(await image),
+      }
     }),
   )
 }

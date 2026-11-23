@@ -705,6 +705,60 @@ test('loads card attachments and comments directly, discarding unsafe links and 
   )
 })
 
+test('keeps the attachment link if its authenticated preview cannot be loaded', async () => {
+  const cardId = 'aaaaaaaaaaaaaaaaaaaaaaaa'
+  const attachmentId = 'bbbbbbbbbbbbbbbbbbbbbbbb'
+  const attachmentPath = `/1/cards/${cardId}/attachments/${attachmentId}`
+  const previewPath = `${attachmentPath}/previews/cccccccccccccccccccccccc/download`
+  const url = `https://trello.com${attachmentPath}/download/diagram.png`
+  const previewUrl = `https://api.trello.com${previewPath}`
+  const request = requestSequence([
+    Response.json({ accessToken: 'trello-token' }),
+    Response.json({
+      actions: [],
+      attachments: [
+        {
+          name: 'diagram.png',
+          previews: [
+            {
+              scaled: true,
+              url: `https://trello.com${previewPath}/large.webp`,
+              width: 600,
+            },
+            {
+              scaled: true,
+              url: `https://example.com${previewPath}`,
+              width: 300,
+            },
+            {
+              scaled: true,
+              url: `https://trello.com${previewPath}`,
+              width: 400,
+            },
+          ],
+          url,
+        },
+      ],
+      desc: '',
+    }),
+    new Response(null, { status: 404 }),
+  ])
+  const details = await createTrelloClient(configuration, request).loadCard(
+    cardId,
+    new AbortController().signal,
+  )
+  expect(details.attachments).toEqual([
+    { name: 'diagram.png', previewUrl, url },
+  ])
+  expect(request).toHaveBeenCalledTimes(3)
+  expect(request.mock.calls[2]).toEqual([
+    previewUrl,
+    expect.objectContaining({
+      headers: { Authorization: 'Bearer trello-token' },
+    }),
+  ])
+})
+
 test('rejects incomplete card detail responses instead of presenting missing data as empty', async () => {
   const request = requestSequence([
     Response.json({ accessToken: 'trello-token' }),
