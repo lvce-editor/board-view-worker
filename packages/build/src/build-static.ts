@@ -106,6 +106,7 @@ process.env.PATH_PREFIX ??= '/board-view-worker'
 
 const { commitHash } = await exportStatic({
   extensionPath: 'packages/board-view-worker',
+  page: 'board',
   // Browser scenarios run from the Node harness, not the workbench test UI.
   testPath: '',
   root,
@@ -126,6 +127,16 @@ if (!configMatch) {
   throw new Error('Expected static HTML to contain the runtime Config script')
 }
 const config = JSON.parse(configMatch[2])
+if (
+  !Array.isArray(config.preloadWorkers) ||
+  config.preloadWorkers.some((worker: string) =>
+    ['editorWorker', 'fileSystemWorker', 'syntaxHighlightingWorker'].includes(
+      worker,
+    ),
+  )
+) {
+  throw new Error('Expected the application page preload configuration')
+}
 config.initialLayout = {
   ...config.initialLayout,
   sideBarView: 'chat2.views.board',
