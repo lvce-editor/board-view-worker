@@ -33,6 +33,12 @@
 .BoardViewTrello .BoardError {
   background: var(--BoardBackground);
 }
+.BoardCoverAuthorization {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 24px 12px;
+}
 .BoardToolbar {
   container-type: inline-size;
   display: grid;

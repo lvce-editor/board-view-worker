@@ -387,6 +387,7 @@ export const createInstance = async (
       ...state,
       authorizationUrl: undefined,
       authorizing: false,
+      authorizingCovers: false,
       cardAction: undefined,
       cardActionError: undefined,
       cardActionMessage: undefined,
@@ -460,6 +461,49 @@ export const createInstance = async (
           faviconController = undefined
       })
   }
+  const loadBoardCovers = async (
+    id: string,
+    signal: Readonly<AbortSignal>,
+    requestGeneration: number,
+  ): Promise<void> => {
+    const isCurrent = (): boolean => {
+      const { boardId } = state
+      return (
+        !disposed &&
+        !signal.aborted &&
+        requestGeneration === generation &&
+        boardId === id
+      )
+    }
+    try {
+      const covers = await host.loadCovers(id, signal)
+      if (!isCurrent() || covers.length === 0) return
+      const current = host.session.get(id)?.board
+      if (!current) return
+      const coverById = new Map(
+        covers.map(({ coverDataUrl, id: cardId }) => [cardId, coverDataUrl]),
+      )
+      const board = {
+        ...current,
+        cards: current.cards.map((card) => {
+          const coverDataUrl = coverById.get(card.id)
+          return coverDataUrl ? { ...card, coverDataUrl } : card
+        }),
+      }
+      host.session.set(id, { board })
+      state = { ...state, board, coverConnectionRequired: false }
+      await notify()
+    } catch (error) {
+      if (
+        isCurrent() &&
+        error instanceof TrelloError &&
+        error.details.code === 'TRELLO_COVER_CONNECTION_REQUIRED'
+      ) {
+        state = { ...state, coverConnectionRequired: true }
+        await notify()
+      }
+    }
+  }
   const connect = async (cardId?: string): Promise<void> => {
     const { board } = state
     cancel(Boolean(board))
@@ -490,41 +534,12 @@ export const createInstance = async (
         board,
         boardId: id,
         connectedIds: ids,
+        coverConnectionRequired: false,
         loading: false,
       }
       if (card) showCard(card)
       await notify()
-      void host
-        .loadCovers(id, signal)
-        .then(async (covers) => {
-          if (
-            disposed ||
-            requestGeneration !== generation ||
-            covers.length === 0
-          )
-            return
-          const current = host.session.get(id)?.board
-          if (!current) return
-          const coverById = new Map(
-            covers.map(({ coverDataUrl, id: cardId }) => [
-              cardId,
-              coverDataUrl,
-            ]),
-          )
-          const enrichedBoard = {
-            ...current,
-            cards: current.cards.map((card) => {
-              const coverDataUrl = coverById.get(card.id)
-              return coverDataUrl ? { ...card, coverDataUrl } : card
-            }),
-          }
-          host.session.set(id, { board: enrichedBoard })
-          state = { ...state, board: enrichedBoard }
-          await notify()
-        })
-        .catch(() => {
-          // Covers are optional; the core board is already available.
-        })
+      void loadBoardCovers(id, signal, requestGeneration)
       await syncTab(board.name, board.faviconUrl)
       refreshFavicon(id, board, requestGeneration)
       try {
@@ -1058,6 +1073,7 @@ export const createInstance = async (
   const waitForAuthorization = async (
     signal: Readonly<AbortSignal>,
     returnTarget: TrelloReturnTarget | undefined,
+    covers?: boolean,
   ): Promise<void> => {
     while (!signal.aborted) {
       await new Promise<void>((resolve) => {
@@ -1070,7 +1086,9 @@ export const createInstance = async (
         signal.addEventListener('abort', finish, { once: true })
       })
       signal.throwIfAborted()
-      const { connected } = await host.status(signal)
+      const { connected } = covers
+        ? await host.status(signal, true)
+        : await host.status(signal)
       signal.throwIfAborted()
       if (connected) {
         if (returnTarget === 'desktop') {
@@ -1144,6 +1162,55 @@ export const createInstance = async (
           },
           error: undefined,
         }
+      }
+      await notify()
+    }
+  }
+  const authorizeCovers = async (): Promise<void> => {
+    const { authorizing, board, boardId, loading } = state
+    if (authorizing || loading || !board) return
+    cancel(true)
+    const requestGeneration = generation
+    controller = new AbortController()
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(600_000),
+    ])
+    state = {
+      ...state,
+      authorizing: true,
+      authorizingCovers: true,
+      error: undefined,
+    }
+    try {
+      const returnTarget = getTrelloReturnTarget(await getHrefFromHost(host))
+      signal.throwIfAborted()
+      const url = await host.authorize(signal, returnTarget, true)
+      if (disposed || generation !== requestGeneration) return
+      state = { ...state, authorizationUrl: url }
+      await notify()
+      await waitForAuthorization(signal, returnTarget, true)
+      if (disposed || generation !== requestGeneration) return
+      state = {
+        ...state,
+        authorizationUrl: undefined,
+        authorizing: false,
+        authorizingCovers: false,
+        coverConnectionRequired: false,
+      }
+      await notify()
+      await loadBoardCovers(boardId, signal, requestGeneration)
+    } catch {
+      if (disposed || generation !== requestGeneration) return
+      state = {
+        ...state,
+        authorizationUrl: undefined,
+        authorizing: false,
+        authorizingCovers: false,
+        error: {
+          code: 'TRELLO_COVER_CONNECTION_FAILED',
+          message: 'Unable to connect Trello cover images. Try again.',
+        },
       }
       await notify()
     }
@@ -1901,6 +1968,7 @@ export const createInstance = async (
     }
     const actions: Readonly<Record<string, () => void | Promise<void>>> = {
       'board-authorize': authorize,
+      'board-authorize-covers': authorizeCovers,
       'board-cancel-authorization': cancelAuthorization,
       'board-cancel-card': cancelCard,
       'board-check-account': checkAccount,

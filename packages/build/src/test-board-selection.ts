@@ -64,6 +64,8 @@ export const testBoardSelection = async (
   let connected = true
   const createRequests: { idList: string; name: string }[] = []
   const authPath = '/auth/trello/connect'
+  const coverAuthPath = '/auth/trello/covers/connect'
+  let coversConnected = false
   const discoveryLoads: string[] = []
   const proxiedLoads: string[] = []
   const boardLoads: string[] = []
@@ -87,6 +89,18 @@ export const testBoardSelection = async (
       })
       return
     }
+    if (path === coverAuthPath) {
+      assert.equal(
+        new URL(route.request().url()).searchParams.get('ticket'),
+        'cover-ticket',
+      )
+      coversConnected = true
+      await route.fulfill({
+        body: 'Trello cover images connected.',
+        contentType: 'text/plain',
+      })
+      return
+    }
     assert.equal(route.request().headers().authorization, 'Bearer board-test')
     let body: unknown
     let status = 200
@@ -105,6 +119,11 @@ export const testBoardSelection = async (
         coveredCardListId = path.slice(path.lastIndexOf('/') + 1)
         body = {}
       }
+    } else if (path.endsWith('/covers/status')) {
+      body = { configured: true, connected: coversConnected }
+    } else if (path.endsWith('/covers/connect')) {
+      assert.equal(route.request().method(), 'POST')
+      body = { url: `${backend}${coverAuthPath}?ticket=cover-ticket` }
     } else if (path.endsWith('/status')) {
       body = { configured: true, connected }
     } else if (path.endsWith('/connect')) {
@@ -127,13 +146,17 @@ export const testBoardSelection = async (
       /^\/api\/integrations\/trello\/boards\/[^/]+\/covers$/u.test(path)
     ) {
       coverLoads.push(path)
-      body = [
-        {
-          coverDataUrl:
-            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nmL8AAAAASUVORK5CYII=',
-          id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
-        },
-      ]
+      if (!coversConnected) {
+        status = 409
+        body = { code: 'TRELLO_COVER_CONNECTION_REQUIRED' }
+      } else
+        body = [
+          {
+            coverDataUrl:
+              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nmL8AAAAASUVORK5CYII=',
+            id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+          },
+        ]
     } else if (/^\/api\/integrations\/trello\/boards\/[^/]+$/u.test(path)) {
       boardLoads.push(path)
       const id = path.split('/').at(-1)
@@ -664,6 +687,22 @@ export const testBoardSelection = async (
       ),
       'url("https://trello-backgrounds.s3.amazonaws.com/engineering.jpg")',
     )
+    const connectCovers = page.getByRole('button', {
+      name: 'Connect Trello cover images',
+    })
+    await connectCovers.waitFor()
+    assert.equal(await page.locator('.BoardCardCover').count(), 0)
+    await connectCovers.click()
+    const coverConsent = context.waitForEvent('page')
+    await page.getByRole('link', { name: 'Continue to Trello' }).click()
+    const coverTab = await coverConsent
+    await coverTab.getByText('Trello cover images connected.').waitFor()
+    await coverTab.close()
+    await page.waitForFunction(() => {
+      const cover = document.querySelector<HTMLImageElement>('.BoardCardCover')
+      return Boolean(cover?.naturalWidth)
+    })
+    assert.equal(connected, true)
     await page.reload()
     await page
       .getByRole('heading', { exact: true, name: 'Engineering' })
@@ -678,6 +717,7 @@ export const testBoardSelection = async (
     const cover = page.locator('.BoardCardCover')
     await cover.waitFor({ state: 'visible' })
     assert.deepEqual(coverLoads, [
+      '/api/integrations/trello/boards/22222222/covers',
       '/api/integrations/trello/boards/22222222/covers',
       '/api/integrations/trello/boards/22222222/covers',
     ])

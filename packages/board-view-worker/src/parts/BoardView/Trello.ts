@@ -256,9 +256,20 @@ const getResponseError = async (
   response: Response,
   mapError: (status: number) => BoardError,
 ): Promise<BoardError> => {
-  if (response.status !== 403) return mapError(response.status)
+  if (response.status !== 403 && response.status !== 409)
+    return mapError(response.status)
   try {
     const body: unknown = await response.json()
+    if (
+      response.status === 409 &&
+      isRecord(body) &&
+      body.code === 'TRELLO_COVER_CONNECTION_REQUIRED'
+    ) {
+      return {
+        code: 'TRELLO_COVER_CONNECTION_REQUIRED',
+        message: 'Connect Trello cover images to see them on this board.',
+      }
+    }
     if (isRecord(body) && body.code === 'TRELLO_REAUTHORIZE_REQUIRED') {
       return {
         code: 'TRELLO_REAUTHORIZE_REQUIRED',
@@ -419,6 +430,7 @@ export interface TrelloClient {
   readonly authorize: (
     signal: Readonly<AbortSignal>,
     returnTarget?: TrelloReturnTarget,
+    covers?: boolean,
   ) => Promise<string>
   readonly boards: (
     signal: Readonly<AbortSignal>,
@@ -460,7 +472,10 @@ export interface TrelloClient {
     query: string,
     signal: Readonly<AbortSignal>,
   ) => Promise<readonly TrelloSearchResult[]>
-  readonly status: (signal: Readonly<AbortSignal>) => Promise<TrelloStatus>
+  readonly status: (
+    signal: Readonly<AbortSignal>,
+    covers?: boolean,
+  ) => Promise<TrelloStatus>
   readonly updateCard: (
     id: string,
     name: string,
@@ -568,10 +583,11 @@ export const createTrelloClient = (
   }
   const status = async (
     signal: Readonly<AbortSignal>,
+    covers = false,
   ): Promise<TrelloStatus> => {
     const revision = pickerRevision
     try {
-      const { data } = await call('status', signal)
+      const { data } = await call(covers ? 'covers/status' : 'status', signal)
       if (
         !isRecord(data) ||
         typeof data.configured !== 'boolean' ||
@@ -579,6 +595,7 @@ export const createTrelloClient = (
       )
         throw new TrelloError(boardError(0))
       if (
+        !covers &&
         (!data.configured || !data.connected) &&
         !signal.aborted &&
         revision === pickerRevision
@@ -587,6 +604,7 @@ export const createTrelloClient = (
       return { configured: data.configured, connected: data.connected }
     } catch (error) {
       if (
+        !covers &&
         isBoardPickerAccessError(error) &&
         !signal.aborted &&
         revision === pickerRevision
@@ -645,9 +663,10 @@ export const createTrelloClient = (
   const authorize = async (
     signal: Readonly<AbortSignal>,
     returnTarget?: TrelloReturnTarget,
+    covers?: boolean,
   ): Promise<string> => {
     const { baseUrl, data } = await call(
-      'connect',
+      covers ? 'covers/connect' : 'connect',
       signal,
       'POST',
       returnTarget && { returnTarget },
@@ -659,7 +678,8 @@ export const createTrelloClient = (
     if (
       !url ||
       url.origin !== new URL(baseUrl).origin ||
-      url.pathname !== '/auth/trello/connect' ||
+      url.pathname !==
+        (covers ? '/auth/trello/covers/connect' : '/auth/trello/connect') ||
       !url.searchParams.get('ticket')
     )
       throw new TrelloError(boardError(0))
