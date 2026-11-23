@@ -53,6 +53,7 @@ export interface TrelloBoardSummary {
   readonly backgroundColor?: string
   readonly backgroundGradient?: string
   readonly backgroundImage?: string
+  readonly fullId?: string
   readonly id: string
   readonly name: string
 }
@@ -242,14 +243,16 @@ const normalizeBoardSummary = (
     typeof value.name !== 'string'
   )
     return undefined
+  const { id: fullId, name, shortLink } = value
+  const id =
+    typeof shortLink === 'string' && boardIdPattern.test(shortLink)
+      ? shortLink
+      : fullId
   return {
     ...normalizeBoardBackground(value, true),
-    id:
-      typeof value.shortLink === 'string' &&
-      boardIdPattern.test(value.shortLink)
-        ? value.shortLink
-        : value.id,
-    name: value.name,
+    ...(id !== fullId && { fullId }),
+    id,
+    name,
   }
 }
 const getResponseError = async (
@@ -381,6 +384,8 @@ const normalizeCachedBoard = (
       ? value.backgroundImage
       : undefined
   return {
+    ...(typeof value.fullId === 'string' &&
+      boardIdPattern.test(value.fullId) && { fullId: value.fullId }),
     id: board.id,
     name: board.name,
     ...(backgroundColor && { backgroundColor }),

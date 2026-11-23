@@ -23,6 +23,14 @@
       },
       "default": [],
       "description": "Remembered Trello board IDs. API keys and tokens are never stored here."
+    },
+    "chat2.connectedBoardNames": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "description": "Last known names of remembered Trello boards."
     }
   },
   "activation": ["onCommand:chat2.showBoardLayout", "onView:chat2.views.board"],

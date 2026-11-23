@@ -1312,11 +1312,11 @@ export const testBoardSelection = async (
     const rememberedTile = page.locator(
       '.BoardRemembered button[name="board-select:22222222"]',
     )
-    assert.equal(await rememberedTile.innerText(), '22222222')
+    assert.equal(await rememberedTile.innerText(), 'Engineering')
     assert.equal(await rememberedTile.getAttribute('class'), 'BoardTile')
     assert.equal(
       await rememberedTile.getAttribute('aria-label'),
-      'Open remembered board 22222222',
+      'Open remembered board Engineering',
     )
     await page.setViewportSize({ height: 844, width: 390 })
     await page.locator('body').click({ position: { x: 5, y: 5 } })
@@ -1347,6 +1347,26 @@ export const testBoardSelection = async (
     )
     if (process.env.BOARD_REMEMBERED_SCREENSHOT)
       await page.screenshot({ path: process.env.BOARD_REMEMBERED_SCREENSHOT })
+    const disconnectedPage = await context.newPage()
+    await disconnectedPage.route(
+      `${backend}/api/integrations/trello/boards/22222222`,
+      (route) =>
+        route.fulfill({
+          json: { code: 'TRELLO_CONNECTION_REQUIRED' },
+          status: 409,
+        }),
+    )
+    await disconnectedPage.goto(new URL('boards/#22222222', baseUrl).href)
+    const disconnectedTile = disconnectedPage.getByRole('button', {
+      exact: true,
+      name: 'Open remembered board Engineering',
+    })
+    assert.equal(await disconnectedTile.innerText(), 'Engineering')
+    assert.equal(
+      await disconnectedTile.getAttribute('name'),
+      'board-select:22222222',
+    )
+    await disconnectedPage.close()
     await page.setViewportSize({ height: 720, width: 1280 })
     fail = true
     await page
