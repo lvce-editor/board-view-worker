@@ -153,10 +153,24 @@
 .BoardSearchResults .BoardTileGrid {
   margin-top: 0;
 }
+.BoardSearchGroup + .BoardSearchGroup {
+  margin-block-start: 6px;
+  padding-block-start: 6px;
+  border-block-start: 1px solid var(--BoardBorder);
+}
+.BoardSearchGroupLabel {
+  padding: 6px 12px 4px;
+  color: var(--BoardMutedForeground);
+  font-size: 0.85em;
+  font-weight: 600;
+}
 .BoardSearchResult {
-  display: block;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -166,6 +180,31 @@
   text-align: left;
   overflow-wrap: anywhere;
   cursor: pointer;
+}
+.BoardSearchResultIcon {
+  width: 18px;
+  height: 18px;
+  margin-block-start: 1px;
+  background: currentColor;
+  mask: var(--BoardSearchIcon) center / contain no-repeat;
+}
+.BoardSearchBoardIcon {
+  --BoardSearchIcon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='3'/%3E%3Cpath d='M9 8v8m6-8v5'/%3E%3C/svg%3E");
+}
+.BoardSearchCardIcon {
+  --BoardSearchIcon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round'%3E%3Crect x='3' y='5' width='18' height='14' rx='3'/%3E%3Cpath d='M7 10h10m-10 4h6'/%3E%3C/svg%3E");
+}
+.BoardSearchResultText {
+  display: grid;
+  gap: 2px;
+}
+.BoardSearchResultTitle {
+  font-weight: 600;
+}
+.BoardSearchResultContext {
+  color: var(--BoardMutedForeground);
+  font-size: 0.9em;
+  line-height: 1.3;
 }
 .BoardSearchResult:hover {
   background: var(--BoardHover);
@@ -391,14 +430,15 @@
 }
 @media (forced-colors: active) {
   .BoardSearch::before,
-  .BoardToolbar .BoardSearch::before {
+  .BoardToolbar .BoardSearch::before,
+  .BoardSearchResultIcon {
     forced-color-adjust: none;
     background: CanvasText;
   }
 }
 .BoardToolbar .BoardSearchResults {
   inset-inline: auto 0;
-  width: min(520px, calc(100cqw - 64px));
+  width: min(640px, calc(100cqw - 64px));
 }
 .BoardRemembered {
   display: grid;

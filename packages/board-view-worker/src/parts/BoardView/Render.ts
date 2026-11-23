@@ -265,20 +265,72 @@ const renderBoardSearch = (state: BoardState): Dom.Node => {
     ? [renderBoardTiles(state)]
     : [Dom.div('BoardSearchEmpty', [Dom.textNode('No boards or cards found')])]
   const renderSearchResult = (result: TrelloSearchResult): Dom.Node => {
+    const isBoard = result.kind === 'board'
     const boardName =
       result.boardName ||
       boards.find((board) => board.id === result.boardId)?.name
-    const name = boardName
-      ? `Card · ${result.name} — ${boardName}`
-      : `Card · ${result.name}`
-    return Dom.button(
-      result.kind === 'board'
-        ? `board-select:${result.id}`
-        : `board-search-card:${result.id}`,
-      result.kind === 'board' ? `Board · ${result.name}` : name,
-      'BoardSearchResult',
+    const context = [boardName, result.listName].filter(Boolean).join(' · ')
+    return Dom.node(
+      VirtualDomElements.Button,
+      {
+        buttonType: 'button',
+        className: 'BoardSearchResult',
+        name: isBoard
+          ? `board-select:${result.id}`
+          : `board-search-card:${result.id}`,
+        onClick: 'handleClick',
+      },
+      [
+        Dom.node(VirtualDomElements.Span, {
+          ariaHidden: true,
+          className: mergeClassNames(
+            'BoardSearchResultIcon',
+            isBoard ? 'BoardSearchBoardIcon' : 'BoardSearchCardIcon',
+          ),
+        }),
+        Dom.node(
+          VirtualDomElements.Span,
+          { className: 'BoardSearchResultText' },
+          [
+            Dom.node(
+              VirtualDomElements.Span,
+              { className: 'BoardSearchResultTitle' },
+              [Dom.textNode(result.name)],
+            ),
+            ...(context
+              ? [
+                  Dom.node(
+                    VirtualDomElements.Span,
+                    { className: 'BoardSearchResultContext' },
+                    [Dom.textNode(context)],
+                  ),
+                ]
+              : []),
+          ],
+        ),
+      ],
     )
   }
+  const renderSearchGroup = (
+    label: string,
+    results: readonly TrelloSearchResult[],
+  ): readonly Dom.Node[] =>
+    results.length > 0
+      ? [
+          Dom.node(
+            VirtualDomElements.Div,
+            { ariaLabel: label, className: 'BoardSearchGroup', role: 'group' },
+            [
+              Dom.node(
+                VirtualDomElements.Div,
+                { ariaHidden: true, className: 'BoardSearchGroupLabel' },
+                [Dom.textNode(label)],
+              ),
+              ...results.map(renderSearchResult),
+            ],
+          ),
+        ]
+      : []
   return Dom.div('BoardSearch', [
     Dom.node(VirtualDomElements.Input, {
       ariaLabel: 'Search boards',
@@ -309,7 +361,14 @@ const renderBoardSearch = (state: BoardState): Dom.Node => {
                   ]),
                 ]
               : []),
-            ...searchResults.map(renderSearchResult),
+            ...renderSearchGroup(
+              'Boards',
+              searchResults.filter((result) => result.kind === 'board'),
+            ),
+            ...renderSearchGroup(
+              'Cards',
+              searchResults.filter((result) => result.kind === 'card'),
+            ),
             ...(showEmpty ? emptyContent : []),
           ]),
         ]

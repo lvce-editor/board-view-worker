@@ -167,9 +167,17 @@ test('searches accessible Trello boards and cards with validated board ownership
       boards: [{ id: '5k8NLHLh', name: 'Work' }],
       cards: [
         {
+          board: { id: '12345678', name: 'Personal' },
           id: '507f1f77bcf86cd799439011',
           idBoard: '12345678',
+          list: { name: 'In Progress' },
           name: 'Chat task',
+        },
+        {
+          id: '507f1f77bcf86cd799439012',
+          idBoard: '12345678',
+          list: { name: 42 },
+          name: 'Another task',
         },
       ],
     }),
@@ -181,13 +189,23 @@ test('searches accessible Trello boards and cards with validated board ownership
     { id: '5k8NLHLh', kind: 'board', name: 'Work' },
     {
       boardId: '12345678',
-      boardName: '',
+      boardName: 'Personal',
       id: '507f1f77bcf86cd799439011',
       kind: 'card',
+      listName: 'In Progress',
       name: 'Chat task',
+    },
+    {
+      boardId: '12345678',
+      boardName: '',
+      id: '507f1f77bcf86cd799439012',
+      kind: 'card',
+      name: 'Another task',
     },
   ])
   expect(request.mock.calls[1]?.[0]).toContain('/1/search?')
+  expect(request.mock.calls[1]?.[0]).toContain('card_board=true')
+  expect(request.mock.calls[1]?.[0]).toContain('card_list=true')
   expect(request.mock.calls[1]?.[0]).toContain('cards_limit=20')
   expect(request.mock.calls[1]?.[1]).toMatchObject({
     headers: { Authorization: 'Bearer trello-token' },
