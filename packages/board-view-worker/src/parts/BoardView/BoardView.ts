@@ -91,7 +91,12 @@ interface BoardViewInstance extends VirtualDomViewInstance, BoardDragHandlers {
     button: number,
     primary: boolean,
   ) => void
-  readonly handleDialogKeyDown: (key: unknown) => void
+  readonly handleDialogKeyDown: (
+    key: unknown,
+    targetName?: unknown,
+    ctrlKey?: unknown,
+    isComposing?: unknown,
+  ) => void
   readonly handleDialogOverlayClick: (className: unknown) => void
 }
 const getMoveTarget = (
@@ -1888,8 +1893,29 @@ export const createInstance = async (
     ): void {
       if (button === 0 && primary) prefetchCard(name)
     },
-    handleDialogKeyDown(key: unknown): void {
-      const { cardActionPanel, editingCard, editingTitle, optionsOpen } = state
+    handleDialogKeyDown(
+      key: unknown,
+      targetName?: unknown,
+      ctrlKey?: unknown,
+      isComposing?: unknown,
+    ): void {
+      const {
+        cardActionPanel,
+        editDescription,
+        editingCard,
+        editingTitle,
+        optionsOpen,
+      } = state
+      if (
+        key === 'Enter' &&
+        ctrlKey === true &&
+        isComposing !== true &&
+        targetName === 'edit-card-desc' &&
+        editDescription
+      ) {
+        handleDescriptionClick('board-description-edit')
+        return
+      }
       if (key === 'Escape' && cardActionPanel) {
         closeCardActions()
         return
@@ -2022,7 +2048,13 @@ export const view: View<VirtualDomViewInstance> = {
     },
     {
       name: 'handleDialogKeyDown',
-      params: ['handleDialogKeyDown', 'event.key'],
+      params: [
+        'handleDialogKeyDown',
+        'event.key',
+        'event.target.name',
+        'event.ctrlKey',
+        'event.isComposing',
+      ],
     },
   ],
   icon: 'project',

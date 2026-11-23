@@ -1473,6 +1473,37 @@ export const testBoardSelection = async (
       .locator('button[name="board-card:aaaaaaaaaaaaaaaaaaaaaaaa"]')
       .filter({ hasText: 'Renamed card' })
       .waitFor()
+    await directDialog.getByRole('button', { name: 'Edit' }).click()
+    const directMarkdownSource = directDialog.getByRole('textbox', {
+      name: 'Markdown source',
+    })
+    await directMarkdownSource.fill('# Saved with shortcut')
+    await directMarkdownSource.press('End')
+    await directMarkdownSource.press('Enter')
+    assert.equal(
+      await directMarkdownSource.inputValue(),
+      '# Saved with shortcut\n',
+    )
+    assert.equal(cardEdits.length, 1, 'Plain Enter leaves the draft unsaved')
+    const updatedDescription = '# Saved with shortcut\nSecond line'
+    await directMarkdownSource.fill(updatedDescription)
+    const savedDescription = directPage.waitForResponse(
+      (response) =>
+        response.request().method() === 'PUT' &&
+        new URL(response.url()).pathname.endsWith(
+          '/cards/aaaaaaaaaaaaaaaaaaaaaaaa',
+        ),
+    )
+    await directMarkdownSource.press('Control+Enter')
+    assert.equal((await savedDescription).ok(), true)
+    await directDialog
+      .getByRole('heading', { name: 'Saved with shortcut' })
+      .waitFor()
+    await directMarkdownSource.waitFor({ state: 'detached' })
+    assert.deepEqual(cardEdits.slice(1), [
+      { desc: updatedDescription, name: 'Renamed card' },
+    ])
+    process.stdout.write('Card description saves with Ctrl+Enter: pass\n')
     await directDialog.getByRole('button', { name: 'Close card' }).click()
     await directPage.waitForURL((url) => url.hash === '#22222222')
     const boardUrl = new URL(directPage.url())
