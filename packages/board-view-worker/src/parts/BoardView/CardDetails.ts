@@ -1,5 +1,9 @@
+import { imageMimePattern, trelloImageUrl } from './DescriptionImages.ts'
+
 export interface CardAttachment {
   readonly name: string
+  readonly previewSrc?: string
+  readonly previewUrl?: string
   readonly url: string
 }
 
@@ -18,6 +22,37 @@ export interface CardDetails {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
+const selectPreview = (
+  attachment: Readonly<Record<string, unknown>>,
+  url: string,
+): string | undefined => {
+  if (Array.isArray(attachment.previews)) {
+    const previews = attachment.previews
+      .flatMap((preview: unknown) => {
+        if (
+          !isRecord(preview) ||
+          preview.scaled !== true ||
+          typeof preview.url !== 'string' ||
+          typeof preview.width !== 'number' ||
+          !Number.isFinite(preview.width) ||
+          preview.width <= 0
+        )
+          return []
+        const source = trelloImageUrl(preview.url)
+        return source ? [{ source, width: preview.width } as const] : []
+      })
+      .toSorted((a, b) => a.width - b.width)
+    // Prefer the smallest full-image preview at least as wide as the thumbnail.
+    const selected =
+      previews.find(({ width }) => width >= 300) ?? previews.at(-1)
+    if (selected) return selected.source
+  }
+  return typeof attachment.mimeType === 'string' &&
+    imageMimePattern.test(attachment.mimeType)
+    ? trelloImageUrl(url)
+    : undefined
+}
+
 export const normalizeAttachment = (
   attachment: unknown,
 ): CardAttachment | undefined => {
@@ -28,9 +63,13 @@ export const normalizeAttachment = (
   )
     return undefined
   const url = URL.parse(attachment.url)
-  if (url?.protocol === 'https:')
-    return { name: attachment.name, url: url.href }
-  return undefined
+  if (url?.protocol !== 'https:') return undefined
+  const previewUrl = selectPreview(attachment, url.href)
+  return {
+    name: attachment.name,
+    url: url.href,
+    ...(previewUrl && { previewUrl }),
+  }
 }
 
 const activityText = (

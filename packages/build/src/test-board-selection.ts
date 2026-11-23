@@ -19,6 +19,8 @@ export const testBoardSelection = async (
   const backend = 'https://trello-selection.test'
   const previewPath =
     '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/previews/eeeeeeeeeeeeeeeeeeeeeeee/download/image.png'
+  const attachmentUrl =
+    'https://trello.com/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/download/design.png'
   const pastedUrl = 'https://example.com/wiki/Board_(project)?tab=details'
   const autolinkUrl = 'https://example.com/updates'
   const markdownUrl = 'https://example.com/roadmap'
@@ -277,6 +279,7 @@ export const testBoardSelection = async (
       return
     }
     if (url.pathname === previewPath) {
+      assert.equal(request.headers().authorization, 'Bearer trello-test')
       imageLoads++
       await releaseImage.promise
       await route.fulfill({
@@ -373,7 +376,17 @@ export const testBoardSelection = async (
             },
           ],
           attachments: [
-            { name: 'design.png', url: 'https://example.com/design.png' },
+            {
+              name: 'design.png',
+              previews: [
+                {
+                  scaled: true,
+                  url: `https://trello.com${previewPath}`,
+                  width: 300,
+                },
+              ],
+              url: attachmentUrl,
+            },
             ...(attachmentUploaded ? [pastedAttachment] : []),
           ],
           desc:
@@ -812,11 +825,20 @@ export const testBoardSelection = async (
     )
     assert.deepEqual(moveRequests, [])
     await dialog.getByRole('button', { name: 'Preview' }).click()
+    const designAttachment = dialog.getByRole('link', {
+      exact: true,
+      name: 'design.png',
+    })
+    assert.equal(await designAttachment.getAttribute('href'), attachmentUrl)
     assert.equal(
-      await dialog
-        .getByRole('link', { name: 'design.png' })
-        .getAttribute('href'),
-      'https://example.com/design.png',
+      await designAttachment
+        .locator('.BoardAttachmentPreview')
+        .evaluate(async (element) => {
+          const img = element as HTMLImageElement
+          await img.decode()
+          return img.naturalWidth
+        }),
+      2,
     )
     await dialog.getByText('Created this card', { exact: true }).waitFor()
     await dialog.getByText('Just now', { exact: true }).waitFor()

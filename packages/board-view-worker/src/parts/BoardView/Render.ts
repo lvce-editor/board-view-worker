@@ -830,6 +830,15 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
                         attachment.url,
                         attachment.name,
                         'BoardAttachment',
+                        attachment.previewSrc
+                          ? [
+                              Dom.node(VirtualDomElements.Img, {
+                                alt: '',
+                                className: 'BoardAttachmentPreview',
+                                src: attachment.previewSrc,
+                              }),
+                            ]
+                          : [],
                       ),
                     )
                   : [

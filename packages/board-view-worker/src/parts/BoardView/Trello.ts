@@ -22,7 +22,7 @@ import {
   type CardAttachment,
   type CardDetails,
 } from './CardDetails.ts'
-import { loadDescriptionImages } from './DescriptionImages.ts'
+import { loadDescriptionImages, loadImage } from './DescriptionImages.ts'
 import { loadBackgroundImage } from './LoadBackgroundImage.ts'
 
 export interface TrelloCard {
@@ -740,6 +740,20 @@ export const createTrelloClient = (
       throw new TrelloError(boardError(0))
     }
   }
+  const loadAttachmentPreview = async (
+    attachment: CardAttachment,
+    token: string,
+    signal: Readonly<AbortSignal>,
+  ): Promise<CardAttachment> => {
+    if (!attachment.previewUrl) return attachment
+    const image = await loadImage(
+      attachment.previewUrl,
+      async () => token,
+      signal,
+      request,
+    )
+    return image ? { ...attachment, previewSrc: image.src } : attachment
+  }
   const loadCard = async (
     id: string,
     signal: Readonly<AbortSignal>,
@@ -750,13 +764,32 @@ export const createTrelloClient = (
       const path = `cards/${id}?${new URLSearchParams({
         actions: 'commentCard,createCard,updateCard:idList',
         actions_limit: '100',
-        attachment_fields: 'name,url',
+        attachment_fields: 'name,url,mimeType,previews',
         attachments: 'true',
         fields: 'desc',
       })}`
       const revision = cacheRevision
       const token = await getTrelloAccessToken(signal)
       signal.throwIfAborted()
+      const previews = new Map<string, Promise<CardAttachment>>()
+      const prepareDetails = async (
+        details: CardDetails,
+      ): Promise<CardDetails> => ({
+        ...details,
+        attachments: await Promise.all(
+          details.attachments.map(async (attachment) => {
+            const { previewUrl } = attachment
+            if (!previewUrl) return attachment
+            let pending = previews.get(previewUrl)
+            if (!pending) {
+              pending = loadAttachmentPreview(attachment, token, signal)
+              previews.set(previewUrl, pending)
+            }
+            const { previewSrc } = await pending
+            return previewSrc ? { ...attachment, previewSrc } : attachment
+          }),
+        ),
+      })
       const cacheEntry = async (): Promise<{
         readonly cache: Cache | undefined
         readonly key: string | undefined
@@ -775,7 +808,7 @@ export const createTrelloClient = (
         if (!cached) return
         let details: CardDetails
         try {
-          details = normalizeDetails(await cached.json())
+          details = await prepareDetails(normalizeDetails(await cached.json()))
         } catch {
           return
         }
@@ -793,7 +826,9 @@ export const createTrelloClient = (
       if (key && !signal.aborted && revision === cacheRevision) {
         await writeCardCache(cache, key, Response.json(data))
       }
-      return details
+      const prepared = await prepareDetails(details)
+      signal.throwIfAborted()
+      return prepared
     } catch (error) {
       if (signal.aborted || error instanceof TrelloError) throw error
       throw new TrelloError({
@@ -815,10 +850,11 @@ export const createTrelloClient = (
     }
     const body = new FormData()
     body.set('file', file)
+    const token = await getTrelloAccessToken(signal)
     const data = await trelloRequest(
       `cards/${id}/attachments?setCover=false`,
       signal,
-      undefined,
+      token,
       {
         body,
         mapError: (status) => {
@@ -836,7 +872,7 @@ export const createTrelloClient = (
     )
     await invalidateCard(id)
     const attachment = normalizeAttachment(Array.isArray(data) ? data[0] : data)
-    if (attachment) return attachment
+    if (attachment) return loadAttachmentPreview(attachment, token, signal)
     throw new TrelloError({
       code: 'TRELLO_INVALID_RESPONSE',
       message:
