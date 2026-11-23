@@ -39,6 +39,7 @@ export interface BoardState {
   readonly accountConnected?: boolean
   readonly authorizationUrl?: string | undefined
   readonly authorizing?: boolean
+  readonly authorizingCovers?: boolean
   readonly board: TrelloBoard | undefined
   readonly boardId: string
   readonly boards: readonly TrelloBoardSummary[]
@@ -50,6 +51,7 @@ export interface BoardState {
   readonly commentDraft?: string | undefined
   readonly commentError?: string | undefined
   readonly connectedIds: readonly string[]
+  readonly coverConnectionRequired?: boolean
   readonly descriptionError?: string | undefined
   readonly descriptionRendering?: boolean
   readonly details?: CardDetails | undefined
@@ -1168,6 +1170,23 @@ const renderStatus = (state: BoardState): readonly Dom.Node[] => {
   ]
 }
 
+const renderCoverAuthorization = (state: BoardState): readonly Dom.Node[] => {
+  const { authorizing, authorizingCovers, board, coverConnectionRequired } =
+    state
+  if (!board || !coverConnectionRequired || (authorizing && !authorizingCovers))
+    return []
+  return [
+    Dom.div(
+      'BoardCoverAuthorization',
+      authorizationActions(
+        state,
+        'board-authorize-covers',
+        'Connect Trello cover images',
+      ),
+    ),
+  ]
+}
+
 export const render = (state: BoardState): Dom.Node => {
   const {
     board,
@@ -1230,6 +1249,7 @@ export const render = (state: BoardState): Dom.Node => {
     [
       renderToolbar(state),
       ...(errorNode ? [errorNode] : []),
+      ...renderCoverAuthorization(state),
       ...(board
         ? [
             renderColumns(state, board, cardsByList, dropTargetId),
