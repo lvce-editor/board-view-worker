@@ -1429,15 +1429,47 @@ export const testBoardSelection = async (
     const toolbar = page.locator('.BoardToolbar')
     for (const width of [390, 601, 1280]) {
       await page.setViewportSize({ height: 844, width })
-      const bounds = await searchResults.boundingBox()
-      const toolbarBounds = await toolbar.boundingBox()
-      assert.ok(
-        bounds &&
-          toolbarBounds &&
-          bounds.x >= toolbarBounds.x &&
-          bounds.x + bounds.width <= toolbarBounds.x + toolbarBounds.width,
-        `Search results fit in a ${width}px viewport`,
+      await page.waitForFunction(
+        (width) => globalThis.innerWidth === width,
+        width,
       )
+      const layout = await toolbar.evaluate((element) => {
+        const measure = (target: Element) => {
+          const { left, right, width } = target.getBoundingClientRect()
+          return { left, right, width }
+        }
+        const input = element.querySelector('.BoardSearchInput')
+        const results = element.querySelector('.BoardSearchResults')
+        if (!input || !results) {
+          throw new Error('Expected the toolbar search input and results')
+        }
+        return {
+          viewport: globalThis.innerWidth,
+          columns: getComputedStyle(element).gridTemplateColumns,
+          toolbar: measure(element),
+          input: measure(input),
+          results: measure(results),
+        }
+      })
+      const details = `${width}px viewport: ${JSON.stringify(layout)}`
+      assert.ok(
+        layout.results.width > 0 &&
+          layout.results.left >= layout.toolbar.left &&
+          layout.results.right <= layout.toolbar.right,
+        `Search results fit in a ${details}`,
+      )
+      if (width > 600) {
+        const center = (layout.toolbar.left + layout.toolbar.right) / 2
+        assert.ok(
+          Math.abs((layout.input.left + layout.input.right) / 2 - center) < 1,
+          `Search input is centered in a ${details}`,
+        )
+        assert.ok(
+          Math.abs((layout.results.left + layout.results.right) / 2 - center) <
+            1,
+          `Search results are centered in a ${details}`,
+        )
+      }
     }
     const gradientIcon = await readBoardIcon()
     assert.ok(gradientIcon.includes('stop-color="#a82be0"'))
