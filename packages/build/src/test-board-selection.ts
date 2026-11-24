@@ -49,10 +49,14 @@ export const testBoardSelection = async (
     'iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAFElEQVR4nGOUKn7BwMDAxMDAgKAAGzUBe6nlFkgAAAAASUVORK5CYII=',
     'base64',
   )
+  const pastedAttachmentPath =
+    '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/333333333333333333333333/download/pasted.png'
   const pastedAttachment = {
     name: 'pasted.png',
-    url: 'https://example.com/pasted.png',
+    url: `https://trello.com${pastedAttachmentPath}`,
   }
+  const pastedMarkdown = `![${pastedAttachment.name}](${pastedAttachment.url})`
+  let savedCardDescription: string | undefined
   const releaseAttachment = Promise.withResolvers<void>()
   let uploadRequests = 0
   let attachmentUploaded = false
@@ -68,6 +72,7 @@ export const testBoardSelection = async (
   const coverAuthPath = '/auth/trello/covers/connect'
   const visibleCoverPath = '/auth/trello/covers/image/nonce.tag.visible'
   const offscreenCoverPath = '/auth/trello/covers/image/nonce.tag.offscreen'
+  const descriptionCoverPath = '/auth/trello/covers/image/nonce.tag.description'
   const visibleCover = {
     attachmentId: '111111111111111111111111',
     expiresAt: Date.now() + 900_000,
@@ -78,6 +83,11 @@ export const testBoardSelection = async (
     ...visibleCover,
     attachmentId: '222222222222222222222222',
     path: offscreenCoverPath,
+  }
+  const descriptionCover = {
+    ...visibleCover,
+    attachmentId: '333333333333333333333333',
+    path: descriptionCoverPath,
   }
   let coversConnected = false
   const discoveryLoads: string[] = []
@@ -116,7 +126,11 @@ export const testBoardSelection = async (
       })
       return
     }
-    if (path === visibleCoverPath || path === offscreenCoverPath) {
+    if (
+      [visibleCoverPath, offscreenCoverPath, descriptionCoverPath].includes(
+        path,
+      )
+    ) {
       assert.equal(route.request().resourceType(), 'image')
       assert.equal(route.request().headers().authorization, undefined)
       coverRequests.push(path)
@@ -129,12 +143,13 @@ export const testBoardSelection = async (
     }
     assert.equal(route.request().headers().authorization, 'Bearer board-test')
     if (path === '/api/integrations/trello/attachment-image') {
-      assert.equal(
-        new URL(route.request().url()).searchParams.get('path'),
-        previewPath,
-      )
-      imageLoads++
-      await releaseImage.promise
+      const imagePath = new URL(route.request().url()).searchParams.get('path')
+      if (imagePath === previewPath) {
+        imageLoads++
+        await releaseImage.promise
+      } else {
+        assert.equal(imagePath, pastedAttachmentPath)
+      }
       await route.fulfill({ body: pastedImage, contentType: 'image/png' })
       return
     }
@@ -144,6 +159,7 @@ export const testBoardSelection = async (
       const fields = route.request().postDataJSON()
       if (typeof fields?.name === 'string') {
         cardEdits.push(fields)
+        savedCardDescription = fields.desc
         body = {
           ...fields,
           id: path.slice(path.lastIndexOf('/') + 1),
@@ -196,7 +212,14 @@ export const testBoardSelection = async (
                     attachments: attachmentUploaded ? 2 : 1,
                     comments: 3,
                   },
-                  ...(coversConnected && { coverImage: visibleCover }),
+                  ...(coversConnected && {
+                    coverImage: savedCardDescription?.includes(pastedMarkdown)
+                      ? descriptionCover
+                      : visibleCover,
+                  }),
+                  ...(savedCardDescription !== undefined && {
+                    desc: savedCardDescription,
+                  }),
                   id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
                   idList: coveredCardListId,
                   labels: [
@@ -339,7 +362,7 @@ export const testBoardSelection = async (
       })
       return
     }
-    if (url.pathname === previewPath) {
+    if (url.pathname === previewPath || url.pathname === pastedAttachmentPath) {
       await route.fulfill({ status: 401 })
       return
     }
@@ -441,9 +464,10 @@ export const testBoardSelection = async (
             ...(attachmentUploaded ? [pastedAttachment] : []),
           ],
           desc:
-            load === 1
+            savedCardDescription ??
+            (load === 1
               ? description
-              : description.replace('Card notes', 'Updated card notes'),
+              : description.replace('Card notes', 'Updated card notes')),
         },
       })
       return
@@ -1097,13 +1121,17 @@ export const testBoardSelection = async (
       name: 'Markdown source',
     })
     const previousDescription = await markdownSource.inputValue()
-    const descriptionDraft = `${previousDescription}\n\nUnsaved description`
+    const beforeSelection = 'Unsaved description\n\n'
+    const selection = 'Replace this'
+    const afterSelection = `\n\n${previousDescription}`
+    const descriptionDraft = beforeSelection + selection + afterSelection
     await markdownSource.fill(descriptionDraft)
     const paste = (image: boolean): Promise<boolean> =>
       markdownSource.evaluate(
-        (element, { bytes, image, name }) => {
+        (element: HTMLTextAreaElement, { bytes, image, name, start, end }) => {
           const clipboardData = new DataTransfer()
           if (image) {
+            element.setSelectionRange(start, end)
             clipboardData.items.add(
               new File([new Uint8Array(bytes)], name, { type: 'image/png' }),
             )
@@ -1121,7 +1149,13 @@ export const testBoardSelection = async (
             }),
           )
         },
-        { bytes: [...pastedImage], image, name: pastedAttachment.name },
+        {
+          bytes: [...pastedImage],
+          end: beforeSelection.length + selection.length,
+          image,
+          name: pastedAttachment.name,
+          start: beforeSelection.length,
+        },
       )
     assert.equal(await paste(false), true, 'Native text paste is allowed')
     await paste(true)
@@ -1149,19 +1183,37 @@ export const testBoardSelection = async (
       await attachmentLink.getAttribute('href'),
       pastedAttachment.url,
     )
-    assert.equal(await markdownSource.inputValue(), descriptionDraft)
-    await markdownSource.fill(previousDescription)
+    const savedDescriptionWithImage =
+      beforeSelection + pastedMarkdown + afterSelection
+    assert.equal(await markdownSource.inputValue(), savedDescriptionWithImage)
+    await dialog.getByRole('button', { exact: true, name: 'Preview' }).click()
+    const inlineImage = descriptionPreview.getByRole('img', {
+      name: 'pasted.png',
+    })
+    await inlineImage.waitFor()
+    const waitForImage = (selector: string) =>
+      page.waitForFunction((value) => {
+        const image = document.querySelector<HTMLImageElement>(value)
+        return image && image.complete && image.naturalWidth > 0
+      }, selector)
+    await waitForImage('.BoardDescriptionImage[alt="pasted.png"]')
+    assert.deepEqual(cardEdits.shift(), {
+      desc: savedDescriptionWithImage,
+      name: 'Card with cover',
+    })
     await dialog.getByRole('button', { name: 'Close card' }).click()
     await dialog.waitFor({ state: 'detached' })
+    await waitForImage('.BoardCardCover[src$=".description"]')
     await badges
       .getByRole('img', { exact: true, name: '2 attachments' })
       .waitFor()
     await cardButton.click()
     await attachmentLink.waitFor()
+    await inlineImage.waitFor()
     await dialog.getByRole('button', { name: 'Close card' }).click()
     await dialog.waitFor({ state: 'detached' })
     process.stdout.write(
-      'Card image paste: native text paste, upload failure, retry, draft, badge and reopen: pass\n',
+      'Card image paste: native text paste, upload failure, retry, Markdown selection, preview, cover, badge and reopen: pass\n',
     )
     const draggedCard = page.locator(
       'button[name="board-card:aaaaaaaaaaaaaaaaaaaaaaaa"]',
@@ -1643,7 +1695,7 @@ export const testBoardSelection = async (
       .waitFor({ state: 'detached' })
     assert.deepEqual(cardEdits, [
       {
-        desc: description.replace('Card notes', 'Updated card notes'),
+        desc: savedDescriptionWithImage,
         name: 'Renamed card',
       },
     ])
@@ -1840,6 +1892,7 @@ export const testBoardSelection = async (
 
     archived = false
     cardEdits.length = 0
+    savedCardDescription = undefined
     coveredCardListId = initialListId
     holdRevalidation = false
     const homeUrl = new URL('?test-board-route=retained', baseUrl)

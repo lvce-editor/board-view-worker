@@ -9,7 +9,7 @@ import {
   type VirtualDomViewInstance,
 } from '@lvce-editor/api'
 import type { Node } from '../VirtualDom/VirtualDom.ts'
-import type { CardDetails } from './CardDetails.ts'
+import type { CardAttachment, CardDetails } from './CardDetails.ts'
 import {
   getBoardHash,
   getUrl,
@@ -42,6 +42,31 @@ const hostedBoardUrl = 'https://lvce-editor.github.io/board-view-worker/boards/'
 const hostedBoardPath = new URL(hostedBoardUrl).pathname
 const hostedHomePath = new URL('..', hostedBoardUrl).pathname
 const boardRefreshInterval = 15_000
+const markdownImageAltCharacters = /[[\]\\\r\n]/gu
+
+interface DescriptionSelection {
+  readonly end: number
+  readonly start: number
+}
+
+const insertDescriptionImage = (
+  text: string,
+  { end, start }: DescriptionSelection,
+  attachment: CardAttachment,
+): { readonly text: string; readonly selection: DescriptionSelection } => {
+  const before = text.slice(0, start)
+  const after = text.slice(end)
+  const alt =
+    attachment.name.replaceAll(markdownImageAltCharacters, '') || 'Image'
+  const url = attachment.url.replaceAll('(', '%28').replaceAll(')', '%29')
+  const prefix = before && !before.endsWith('\n\n') ? '\n\n' : ''
+  const suffix = after && !after.startsWith('\n\n') ? '\n\n' : ''
+  const inserted = `${before}${prefix}![${alt}](${url})`
+  return {
+    selection: { end: inserted.length, start: inserted.length },
+    text: inserted + suffix + after,
+  }
+}
 
 const isCardTitleBlur = (event: Readonly<ViewEvent>): boolean =>
   event.type === 'blur' && event.name === 'board-card-title'
@@ -89,7 +114,12 @@ interface CardPrefetch {
 }
 
 interface BoardViewInstance extends VirtualDomViewInstance, BoardDragHandlers {
-  readonly handleCardPaste: (files: unknown) => void
+  readonly handleCardPaste: (
+    files: unknown,
+    targetName?: unknown,
+    selectionStart?: unknown,
+    selectionEnd?: unknown,
+  ) => void
   readonly handleCardPointerDown: (
     name: string,
     button: number,
@@ -831,13 +861,18 @@ export const createInstance = async (
       }
     }
   }
-  const uploadImages = async (files: readonly File[]): Promise<void> => {
-    const { details, detailsError } = state
+  const uploadImages = async (
+    files: readonly File[],
+    selection?: DescriptionSelection,
+  ): Promise<void> => {
+    const { details, detailsError, editDesc = '' } = state
     if (attachmentUpload || !details || detailsError) return
+    let draft = editDesc
+    let currentSelection = selection
     const upload = runCardAction('upload', async (card, boardId, signal) => {
       for (const file of files) {
         const attachment = await host.addAttachment(card.id, file, signal)
-        const { board, details, editingCard } = state
+        const { board, details, editDesc: current = '', editingCard } = state
         if (signal.aborted || !board || !details || editingCard?.id !== card.id)
           return
         const attachmentCount =
@@ -851,6 +886,16 @@ export const createInstance = async (
             item.id === card.id ? { ...item, attachmentCount } : item,
           ),
         }
+        if (currentSelection) {
+          // Preserve typing during the upload if the captured selection is stale.
+          const range =
+            current === draft
+              ? currentSelection
+              : { end: current.length, start: current.length }
+          const insert = insertDescriptionImage(current, range, attachment)
+          draft = insert.text
+          currentSelection = insert.selection
+        }
         host.session.set(boardId, { board: updatedBoard })
         state = {
           ...state,
@@ -860,6 +905,7 @@ export const createInstance = async (
             attachments: [...details.attachments, attachment],
           },
           editingCard: { ...editingCard, attachmentCount },
+          ...(selection && { editDesc: draft, editError: undefined }),
         }
         void notify()
       }
@@ -2192,13 +2238,24 @@ export const createInstance = async (
     handleBoardDrop(name: string): void {
       void moveCard(name)
     },
-    handleCardPaste(files: unknown): void {
+    handleCardPaste(files, targetName, selectionStart, selectionEnd): void {
       if (!Array.isArray(files)) return
       const images: File[] = files.filter(
         (file): file is File =>
           file instanceof File && file.type.startsWith('image/'),
       )
-      if (images.length > 0) void uploadImages(images)
+      if (images.length === 0) return
+      const { editDesc = '', editDescription } = state
+      const { length } = editDesc
+      const selection =
+        targetName === 'edit-card-desc' && editDescription
+          ? {
+              end: typeof selectionEnd === 'number' ? selectionEnd : length,
+              start:
+                typeof selectionStart === 'number' ? selectionStart : length,
+            }
+          : undefined
+      void uploadImages(images, selection)
     },
     handleCardPointerDown(
       name: string,
@@ -2357,7 +2414,13 @@ export const view: View<VirtualDomViewInstance> = {
     },
     {
       name: 'handleCardPaste',
-      params: ['handleCardPaste', 'event.clipboardData.files'],
+      params: [
+        'handleCardPaste',
+        'event.clipboardData.files',
+        'event.target.name',
+        'event.target.selectionStart',
+        'event.target.selectionEnd',
+      ],
     },
     {
       name: 'handleDialogKeyDown',
