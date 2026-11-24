@@ -494,6 +494,11 @@
   font-size: 14px;
   overflow-wrap: anywhere;
 }
+.BoardColumnCount {
+  flex: 0 0 auto;
+  color: var(--BoardMutedForeground);
+  font-size: 14px;
+}
 .BoardListActionsButton {
   flex: 0 0 auto;
   min-width: 32px;
