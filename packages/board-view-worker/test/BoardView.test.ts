@@ -1091,6 +1091,8 @@ test('keeps a cached board list on a transient error and clears it when Trello d
 
 test('restores the board from its URL hash before saved view state', async () => {
   const host = createHost()
+  const pendingBoard = Promise.withResolvers<TrelloBoard>()
+  jest.mocked(host.load).mockReturnValue(pendingBoard.promise)
   jest.mocked(host.read).mockResolvedValue(['5k8NLHLh', '12345678'])
   jest.mocked(host.execute).mockImplementation(async (command) => {
     if (command === 'Layout.getHref')
@@ -1101,6 +1103,10 @@ test('restores the board from its URL hash before saved view state', async () =>
     { ...createContext(), state: { boardId: '5k8NLHLh' } },
     host,
   )
+  const pendingDom = JSON.stringify(await view.render())
+  expect(pendingDom).toContain('Loading…')
+  expect(pendingDom).not.toContain('Connect Trello')
+  pendingBoard.resolve(board)
   await flush()
   expect(host.load).toHaveBeenCalledWith('12345678', expect.any(AbortSignal))
   expect(JSON.stringify(await view.render())).toContain('A task')

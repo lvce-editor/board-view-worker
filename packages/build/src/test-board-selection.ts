@@ -1850,7 +1850,30 @@ export const testBoardSelection = async (
     homeBoardUrl.search = homeUrl.search
     homeBoardUrl.hash = '#22222222'
     await page.waitForURL(homeBoardUrl.href)
-    await page.reload()
+    const initialBoard = Promise.withResolvers<void>()
+    await page.route(
+      `${backend}/api/integrations/trello/boards/22222222?covers=lazy`,
+      async (route) => {
+        await initialBoard.promise
+        await route.fallback()
+      },
+      { times: 1 },
+    )
+    try {
+      await page.reload()
+      await page
+        .locator('.BoardStatus')
+        .getByText('Loading…', { exact: true })
+        .waitFor()
+      assert.equal(
+        await page
+          .getByRole('button', { exact: true, name: 'Connect Trello' })
+          .count(),
+        0,
+      )
+    } finally {
+      initialBoard.resolve()
+    }
     await page
       .getByRole('heading', { exact: true, name: 'Engineering' })
       .waitFor()
