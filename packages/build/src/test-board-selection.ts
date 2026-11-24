@@ -640,6 +640,19 @@ export const testBoardSelection = async (
     await boardSearch.fill('')
     assert.equal(discoveryLoads.length, 1)
     assert.equal(new URL(page.url()).hash, '#22222222')
+    const commandPalette = page.getByRole('combobox', {
+      name: 'Type the name of a command to run.',
+    })
+    for (const shortcut of ['F1', 'Control+Shift+P']) {
+      await page.keyboard.press(shortcut)
+      await commandPalette.fill('>Open Board Layout', { timeout: 5000 })
+      await page
+        .getByRole('option', { exact: true, name: 'View: Open Board Layout' })
+        .waitFor({ timeout: 5000 })
+      await page.keyboard.press('Escape')
+      await commandPalette.waitFor({ state: 'hidden' })
+    }
+    assert.equal(new URL(page.url()).hash, '#22222222')
     assert.ok(
       (await readBoardIcon(true)).includes(
         '<image href="data:image/png;base64,',
