@@ -627,7 +627,7 @@
   z-index: 10;
   inset: 0;
   display: grid;
-  place-items: center;
+  place-items: start center;
   box-sizing: border-box;
   padding: 20px;
   background: rgb(0 0 0 / 45%);
