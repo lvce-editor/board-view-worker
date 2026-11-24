@@ -9,7 +9,11 @@ const showIdeLayout = async (): Promise<void> => {
   if (!url) return
   const idePath = getIdePath(url.pathname)
   if (idePath !== url.pathname) {
-    await executeCommand('Layout.setPathName', idePath + url.search)
+    // Send both requests before leaving the board route or replacing its view.
+    await Promise.all([
+      executeCommand('Layout.setPathName', idePath + url.search),
+      executeCommand('SideBar.show', 'Explorer'),
+    ])
   }
 }
 
