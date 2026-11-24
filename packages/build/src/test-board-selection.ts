@@ -1946,10 +1946,19 @@ export const testBoardSelection = async (
     await page.locator('.Workbench.IdeLayoutFromAi').waitFor()
     const titleBar = page.getByRole('contentinfo', { name: 'Title Bar' })
     await titleBar.waitFor()
-    await page.getByRole('tab', { exact: true, name: 'Explorer' }).waitFor()
+    const boardView = page.locator('.BoardView')
+    await boardView.waitFor({ state: 'detached' })
+    const selectedExplorer = page.getByRole('tab', {
+      exact: true,
+      name: 'Explorer',
+      selected: true,
+    })
+    await selectedExplorer.waitFor()
     await page.reload()
     await titleBar.waitFor()
     assert.equal(await page.locator('.Workbench.AiNativeLayout').count(), 0)
+    await selectedExplorer.waitFor()
+    assert.equal(await boardView.count(), 0)
     process.stdout.write('Switch from an open board to the IDE layout: pass\n')
   } finally {
     releaseDetails.resolve()
