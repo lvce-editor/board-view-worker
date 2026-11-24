@@ -44,6 +44,7 @@ const createHost = (): BoardHost => ({
   boards: jest
     .fn<BoardHost['boards']>()
     .mockResolvedValue([{ id: '5k8NLHLh', name: 'Work' }]),
+  cachedBoard: jest.fn<BoardHost['cachedBoard']>().mockResolvedValue(undefined),
   cachedBoards: jest
     .fn<BoardHost['cachedBoards']>()
     .mockResolvedValue(undefined),
@@ -184,6 +185,51 @@ test('polls the open board, recovers from failure and discards a response after 
     expect(host.session.get(id)?.board.cards[0]).toEqual(updated.cards[0])
     expect(host.load).toHaveBeenCalledTimes(3)
   } finally {
+    jest.useRealTimers()
+  }
+})
+
+test('keeps the cached frame on identical data and clears it when access is denied', async () => {
+  jest.useFakeTimers({ doNotFake: ['setImmediate'] })
+  const context = createContext()
+  const host = createHost()
+  const id = '5k8NLHLh'
+  const pending = Promise.withResolvers<TrelloBoard>()
+  jest
+    .mocked(host.execute)
+    .mockImplementation(async (command) =>
+      command === 'Layout.getHref'
+        ? `https://example.com/boards/#${id}`
+        : undefined,
+    )
+  jest.mocked(host.cachedBoard).mockResolvedValue(board)
+  jest
+    .mocked(host.load)
+    .mockReturnValueOnce(pending.promise)
+    .mockRejectedValueOnce(
+      new TrelloError({
+        code: 'TRELLO_ACCESS_DENIED',
+        message: 'Trello denied access.',
+      }),
+    )
+  const view = await createInstance(context, host)
+  try {
+    await flush()
+    expect(host.session.get(id)?.board).toBe(board)
+    expect(host.load).toHaveBeenCalledTimes(1)
+    const renders = jest.mocked(context.requestRerender).mock.calls.length
+    pending.resolve(structuredClone(board))
+    await flush()
+    expect(context.requestRerender).toHaveBeenCalledTimes(renders)
+    expect(host.session.get(id)?.board).toBe(board)
+
+    await jest.advanceTimersByTimeAsync(15_000)
+    expect(host.session.get(id)).toBeUndefined()
+    expect(JSON.stringify(await view.render())).toContain(
+      'Trello denied access.',
+    )
+  } finally {
+    view.dispose?.()
     jest.useRealTimers()
   }
 })

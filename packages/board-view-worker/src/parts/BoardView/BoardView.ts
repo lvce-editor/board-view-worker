@@ -24,6 +24,7 @@ import { render, type BoardState } from './Render.ts'
 import {
   boardIdPattern,
   isBoardPickerAccessError,
+  isBoardUnavailable,
   trelloClient,
   parseBoardId,
   TrelloError,
@@ -51,6 +52,7 @@ export interface BoardHost {
   readonly archiveCard: typeof trelloClient.archiveCard
   readonly authorize: typeof trelloClient.authorize
   readonly boards: typeof trelloClient.boards
+  readonly cachedBoard: typeof trelloClient.cachedBoard
   readonly cachedBoards: typeof trelloClient.cachedBoards
   readonly createCard: typeof trelloClient.createCard
   readonly createFavicon: typeof createBoardFavicon
@@ -130,6 +132,7 @@ const defaultHost: BoardHost = {
   archiveCard: trelloClient.archiveCard,
   authorize: trelloClient.authorize,
   boards: trelloClient.boards,
+  cachedBoard: trelloClient.cachedBoard,
   cachedBoards: trelloClient.cachedBoards,
   createCard: trelloClient.createCard,
   createFavicon: createBoardFavicon,
@@ -443,6 +446,7 @@ export const createInstance = async (
     cancelCardPrefetch()
     controller?.abort()
     boardRefreshController?.abort()
+    boardRefreshController = undefined
     detailsController?.abort()
     faviconController?.abort()
     cardMutationController?.abort()
@@ -524,10 +528,90 @@ export const createInstance = async (
           faviconController = undefined
       })
   }
-  const connect = async (cardId?: string): Promise<void> => {
-    const { board } = state
+  const boardLoadError = (error: unknown): void => {
+    const connectionRequired =
+      error instanceof TrelloError &&
+      error.details.code === 'TRELLO_CONNECTION_REQUIRED'
+    state = {
+      ...state,
+      error:
+        error instanceof TrelloError
+          ? error.details
+          : {
+              code: 'TRELLO_REQUEST_FAILED',
+              message:
+                'Unable to load this board. Check your connection and try again.',
+            },
+      loading: false,
+      ...(connectionRequired && {
+        accountConnected: false,
+        providerSelected: true,
+      }),
+    }
+  }
+  const discardBoard = async (error: unknown): Promise<void> => {
+    const { boardId } = state
+    cancel()
+    host.session.remove(boardId)
+    state = { ...state, board: undefined, editingCard: undefined }
+    boardLoadError(error)
+    await syncTab('Boards')
+    await notify()
+  }
+  const showConnectedBoard = async (
+    id: string,
+    board: TrelloBoard,
+    requestGeneration: number,
+    cached: boolean,
+    cardId?: string,
+  ): Promise<void> => {
+    const isCurrent = (): boolean =>
+      !disposed && requestGeneration === generation
+    const { connectedIds } = state
+    const card = board.cards.find((item) => item.id === cardId)
+    await setBoardHash(
+      host,
+      getBoardHash(id, cached ? cardId : card?.id),
+      isCurrent,
+    )
+    if (!isCurrent()) return
+    host.session.set(id, { board })
+    const ids = [...new Set([...connectedIds, id])]
+    state = {
+      ...state,
+      accountConnected: true,
+      board,
+      boardId: id,
+      connectedIds: ids,
+      loading: false,
+    }
+    rememberBoardNames([{ fullId: board.id, id, name: board.name }])
+    const saved = saveBoardPreferences(ids)
+    if (card) showCard(card)
+    await notify()
+    if (!isCurrent()) return
+    await syncTab(board.name, board.faviconUrl)
+    refreshFavicon(id, board, requestGeneration)
+    if (cached && isCurrent())
+      void refreshBoard(true, card ? undefined : cardId)
+    if (!(await saved) && isCurrent()) {
+      state = {
+        ...state,
+        error: {
+          code: 'BOARD_SETTINGS_FAILED',
+          message:
+            'The board is connected, but its details could not be saved. Reconnect it next time.',
+        },
+      }
+      await notify()
+    }
+  }
+  const connect = async (cardId?: string, useCache = false): Promise<void> => {
+    const { board, boardId } = state
     cancel(Boolean(board))
     const requestGeneration = generation
+    const isCurrent = (): boolean =>
+      !disposed && requestGeneration === generation
     controller = new AbortController()
     const signal = AbortSignal.any([
       controller.signal,
@@ -535,68 +619,30 @@ export const createInstance = async (
     ])
     state = { ...state, error: undefined, loading: true }
     try {
-      const { boardId, connectedIds } = state
-      const board = await host.load(boardId, signal)
-      if (disposed || requestGeneration !== generation) return
-      const id = parseBoardId(boardId)
-      const card = board.cards.find((item) => item.id === cardId)
-      await setBoardHash(
-        host,
-        getBoardHash(id, card?.id),
-        () => !disposed && requestGeneration === generation,
-      )
-      if (disposed || requestGeneration !== generation) return
-      host.session.set(id, { board })
-      const ids = [...new Set([...connectedIds, id])]
-      state = {
-        ...state,
-        accountConnected: true,
+      const cached = useCache
+        ? await host.cachedBoard(boardId, signal)
+        : undefined
+      if (!isCurrent()) return
+      const board = cached ?? (await host.load(boardId, signal))
+      if (!isCurrent()) return
+      await showConnectedBoard(
+        parseBoardId(boardId),
         board,
-        boardId: id,
-        connectedIds: ids,
-        loading: false,
-      }
-      rememberBoardNames([{ fullId: board.id, id, name: board.name }])
-      const saved = saveBoardPreferences(ids)
-      if (card) showCard(card)
-      await notify()
-      await syncTab(board.name, board.faviconUrl)
-      refreshFavicon(id, board, requestGeneration)
-      if (!(await saved)) {
-        if (disposed || requestGeneration !== generation) return
-        state = {
-          ...state,
-          error: {
-            code: 'BOARD_SETTINGS_FAILED',
-            message:
-              'The board is connected, but its details could not be saved. Reconnect it next time.',
-          },
-        }
-      }
+        requestGeneration,
+        Boolean(cached),
+        cardId,
+      )
     } catch (error) {
-      if (disposed || requestGeneration !== generation) return
-      state = {
-        ...state,
-        error:
-          error instanceof TrelloError
-            ? error.details
-            : {
-                code: 'TRELLO_REQUEST_FAILED',
-                message:
-                  'Unable to load this board. Check your connection and try again.',
-              },
-        loading: false,
-        ...(error instanceof TrelloError &&
-          error.details.code === 'TRELLO_CONNECTION_REQUIRED' && {
-            accountConnected: false,
-            board: undefined,
-            providerSelected: true,
-          }),
+      if (!isCurrent()) return
+      if (isBoardUnavailable(error)) {
+        await discardBoard(error)
+        return
       }
+      boardLoadError(error)
+      const { board: activeBoard } = state
+      if (!activeBoard) await syncFavicon('')
+      await notify()
     }
-    const { board: activeBoard } = state
-    if (!activeBoard) await syncFavicon('')
-    await notify()
   }
   const persistCard = async (
     card: TrelloCard,
@@ -1631,6 +1677,11 @@ export const createInstance = async (
     }
     void loadCardDetails(loadPrefetched)
   }
+  const restoreLinkedCard = (board: TrelloBoard, cardId: string): void => {
+    const card = board.cards.find((item) => item.id === cardId)
+    if (card) showCard(card)
+    else void syncBoardHash()
+  }
   const canRefreshBoard = ({
     accountConnected,
     board,
@@ -1661,18 +1712,66 @@ export const createInstance = async (
       !postingComment &&
       !savingCard,
     )
-  const refreshBoard = async (): Promise<void> => {
+  const refreshBoard = async (
+    fromCache = false,
+    linkedCardId?: string,
+  ): Promise<void> => {
     const { board, boardId } = state
-    if (disposed || !board || !canRefreshBoard(state)) return
+    if (
+      disposed ||
+      !board ||
+      boardRefreshController ||
+      (!fromCache && !canRefreshBoard(state))
+    )
+      return
     const requestController = new AbortController()
     boardRefreshController = requestController
     const { signal } = requestController
-    const fresh = await host.load(boardId, signal)
-    const { board: currentBoard } = state
-    // Local writes replace the board. A request started before one of
-    // those writes must not undo it, even if the write has already finished.
-    if (signal.aborted || currentBoard !== board || !canRefreshBoard(state))
-      return
+    try {
+      const fresh = await host.load(boardId, signal)
+      const { board: currentBoard } = state
+      // Favicon loading can replace the board object without changing its data.
+      // Card mutations replace the cards, so an earlier fetch cannot undo them.
+      if (
+        signal.aborted ||
+        currentBoard?.cards !== board.cards ||
+        !canRefreshBoard(state)
+      )
+        return
+      await applyFreshBoard(boardId, currentBoard, fresh, linkedCardId)
+    } catch (error) {
+      // Transient failures leave the visible snapshot available for the next poll.
+      if (!signal.aborted && isBoardUnavailable(error))
+        await discardBoard(error)
+    } finally {
+      if (boardRefreshController === requestController)
+        boardRefreshController = undefined
+    }
+  }
+  const syncRefreshedBoardTab = (
+    boardId: string,
+    previousName: string,
+    updated: TrelloBoard,
+    sameFavicon: boolean,
+  ): void => {
+    if (!sameFavicon) {
+      faviconController?.abort()
+      refreshFavicon(boardId, updated, generation)
+    }
+    if (updated.name !== previousName) {
+      if (rememberBoardNames([{ id: boardId, name: updated.name }]))
+        void saveBoardPreferences()
+      void syncTab(updated.name, updated.faviconUrl)
+    } else if (!sameFavicon) {
+      void syncFavicon(updated.faviconUrl || '')
+    }
+  }
+  const applyFreshBoard = async (
+    boardId: string,
+    board: TrelloBoard,
+    fresh: TrelloBoard,
+    linkedCardId?: string,
+  ): Promise<void> => {
     const previousById = new Map(board.cards.map((card) => [card.id, card]))
     const renewBefore = Date.now() + 60_000
     const cards = fresh.cards.map((card) => {
@@ -1699,22 +1798,40 @@ export const createInstance = async (
         ? { ...card, coverImage }
         : card
     })
-    if (
-      cards.length === board.cards.length &&
-      cards.every((card, index) => card === board.cards[index]) &&
-      fresh.coverConnectionRequired === board.coverConnectionRequired &&
-      JSON.stringify(fresh.lists) === JSON.stringify(board.lists)
-    )
-      return
-    const { coverConnectionRequired: _previousConnection, ...current } = board
-    const updated = {
-      ...current,
-      cards,
-      ...(fresh.coverConnectionRequired && { coverConnectionRequired: true }),
-      lists: fresh.lists,
-    }
+    const {
+      cards: _oldCards,
+      faviconUrl: _oldIcon,
+      lists: oldLists,
+      ...oldMetadata
+    } = board
+    const {
+      cards: _freshCards,
+      faviconUrl: freshIcon,
+      lists,
+      ...metadata
+    } = fresh
+    const changed =
+      cards.length !== board.cards.length ||
+      cards.some((card, index) => card !== board.cards[index]) ||
+      JSON.stringify(lists) !== JSON.stringify(oldLists) ||
+      JSON.stringify(metadata) !== JSON.stringify(oldMetadata)
+    if (!changed && !linkedCardId) return
+    const sameFavicon =
+      JSON.stringify(fresh.faviconBackground) ===
+      JSON.stringify(board.faviconBackground)
+    const faviconUrl = sameFavicon ? board.faviconUrl : freshIcon
+    const updated = changed
+      ? {
+          ...metadata,
+          cards,
+          lists,
+          ...(faviconUrl !== undefined && { faviconUrl }),
+        }
+      : board
     host.session.set(boardId, { board: updated })
     state = { ...state, board: updated }
+    if (linkedCardId) restoreLinkedCard(updated, linkedCardId)
+    syncRefreshedBoardTab(boardId, board.name, updated, sameFavicon)
     const { details, editingCard } = state
     if (editingCard) {
       const card = cards.find(({ id }) => id === editingCard.id)
@@ -1734,14 +1851,7 @@ export const createInstance = async (
   const scheduleBoardRefresh = (): void => {
     if (disposed) return
     boardRefreshTimer = setTimeout(() => {
-      void refreshBoard()
-        .catch(() => {
-          // Keep the current board during a transient background failure.
-        })
-        .finally(() => {
-          boardRefreshController = undefined
-          scheduleBoardRefresh()
-        })
+      void refreshBoard().finally(scheduleBoardRefresh)
     }, boardRefreshInterval)
     boardRefreshTimer.unref?.()
   }
@@ -1795,7 +1905,7 @@ export const createInstance = async (
     await restoreConnection(boardId)
     if (showOverview && !disposed && (!accountConnected || boards.length === 0))
       void checkAccount(true)
-    if (boardId && !host.session.get(boardId)) void connect()
+    if (boardId && !host.session.get(boardId)) void connect(undefined, true)
   }
   const openSearchCard = async (id: string): Promise<void> => {
     const { searchResults = [] } = state
@@ -2194,7 +2304,7 @@ export const createInstance = async (
   }
   const restoreInitialBoard = (): void => {
     if (!initialBoard) {
-      if (urlBoardId) void connect(urlCardId)
+      if (urlBoardId) void connect(urlCardId, true)
       else void checkAccount(true)
       return
     }
@@ -2203,9 +2313,7 @@ export const createInstance = async (
       if (!urlBoardId) void syncBoardHash()
       return
     }
-    const card = initialBoard.cards.find((item) => item.id === urlCardId)
-    if (card) showCard(card)
-    else void syncBoardHash()
+    restoreLinkedCard(initialBoard, urlCardId)
   }
   restoreInitialBoard()
   scheduleBoardRefresh()

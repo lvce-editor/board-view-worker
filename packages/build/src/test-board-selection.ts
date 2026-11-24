@@ -89,6 +89,7 @@ export const testBoardSelection = async (
   const initialListId = 'bbbbbbbbbbbbbbbbbbbbbbbb'
   let coveredCardListId = initialListId
   let externalCardEdit = false
+  let boardName = 'Engineering'
   await context.route(`${backend}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path === authPath) {
@@ -236,7 +237,7 @@ export const testBoardSelection = async (
           { id: 'cccccccccccccccccccccccc', name: 'Doing', pos: 2 },
           { id: 'dddddddddddddddddddddddd', name: 'Done', pos: 3 },
         ],
-        name: 'Engineering',
+        name: boardName,
         prefs:
           id === '33333333'
             ? {
@@ -1854,6 +1855,9 @@ export const testBoardSelection = async (
     homeBoardUrl.search = homeUrl.search
     homeBoardUrl.hash = '#22222222'
     await page.waitForURL(homeBoardUrl.href)
+    await page.evaluate(() =>
+      caches.delete('builtin.board-view.board-snapshots-v1'),
+    )
     const initialBoard = Promise.withResolvers<void>()
     pendingInitialBoard = initialBoard.promise
     try {
@@ -1875,6 +1879,31 @@ export const testBoardSelection = async (
     await page
       .getByRole('heading', { exact: true, name: 'Engineering' })
       .waitFor()
+
+    const warmReload = Promise.withResolvers<void>()
+    pendingInitialBoard = warmReload.promise
+    try {
+      boardName = 'Engineering renamed in Trello'
+      await page.reload()
+      await page
+        .getByRole('heading', { exact: true, name: 'Engineering' })
+        .waitFor()
+      await cardButton.waitFor()
+      assert.equal(
+        await page
+          .locator('.BoardStatus')
+          .filter({ hasText: 'Loading…' })
+          .count(),
+        0,
+      )
+    } finally {
+      pendingInitialBoard = undefined
+      warmReload.resolve()
+    }
+    await page.getByRole('heading', { exact: true, name: boardName }).waitFor()
+    process.stdout.write(
+      'Board reload shows a snapshot before Trello responds and applies changes: pass\n',
+    )
 
     await cardButton.click()
     const cardDetailUrl = new URL(homeBoardUrl)
