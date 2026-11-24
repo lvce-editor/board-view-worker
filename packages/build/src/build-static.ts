@@ -156,6 +156,10 @@ if (
 ) {
   throw new Error('Expected the application page preload configuration')
 }
+config.preloadWorkers = config.preloadWorkers.filter(
+  (worker: string) =>
+    worker !== 'statusBarWorker' && worker !== 'iconThemeWorker',
+)
 config.initialLayout = {
   ...config.initialLayout,
   sideBarView: 'chat2.views.board',

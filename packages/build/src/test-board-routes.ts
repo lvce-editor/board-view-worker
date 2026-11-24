@@ -12,6 +12,18 @@ export const testBoardRoutes = async (
       const errors: string[] = []
       page.on('pageerror', (error) => errors.push(error.message))
       await page.goto(`${baseUrl}${route}`)
+      const { preloadWorkers } = JSON.parse(
+        await page.locator('script#Config').innerHTML(),
+      )
+      assert.ok(Array.isArray(preloadWorkers))
+      assert.deepEqual(
+        preloadWorkers.filter(
+          (worker) =>
+            worker === 'statusBarWorker' || worker === 'iconThemeWorker',
+        ),
+        [],
+        `${route} should omit the status bar and icon theme workers from preloads`,
+      )
       await page.locator('.BoardProviderGrid').waitFor()
       await page.reload()
       await page.locator('.BoardProviderGrid').waitFor()
