@@ -16,6 +16,9 @@ export const getBoardHash = (id: string, cardId?: string): string => {
 export const isBoardPath = (pathname: string): boolean =>
   boardPathRegex.test(pathname)
 
+export const getIdePath = (pathname: string): string =>
+  pathname.replace(boardPathRegex, '/')
+
 export const getBoardPath = (href: string, assetDir: string): string => {
   const currentUrl = new URL(href)
   const assetPath = new URL(assetDir, currentUrl).pathname

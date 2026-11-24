@@ -1,10 +1,23 @@
 import { access, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path, { join } from 'node:path'
+import { buildStandaloneBoardWorker } from './build-extension.ts'
 import './build.ts'
 import { root } from './root.ts'
 
 const extensionId = 'builtin.board-view'
+const ideCommand = { id: 'chat2.showIdeLayout', label: 'View: Open IDE Layout' }
+
+interface BoardExtensionManifest {
+  readonly activation?: readonly string[]
+  readonly commands?: readonly { readonly id: string; readonly label: string }[]
+}
+
+const addIdeCommand = <T extends BoardExtensionManifest>(manifest: T): T => ({
+  ...manifest,
+  activation: [...(manifest.activation ?? []), `onCommand:${ideCommand.id}`],
+  commands: [...(manifest.commands ?? []), ideCommand],
+})
 const serverPackagePath = join(root, 'packages', 'server', 'package.json')
 const serverRequire = createRequire(serverPackagePath)
 const { exportStatic } = serverRequire('@lvce-editor/shared-process')
@@ -112,11 +125,17 @@ const { commitHash } = await exportStatic({
   root,
 })
 
-await cp(
-  path.join(root, '.tmp', 'package'),
-  path.join(root, 'dist', commitHash, 'extensions', extensionId),
-  { recursive: true, force: true },
+const staticExtensionDir = path.join(
+  root,
+  'dist',
+  commitHash,
+  'extensions',
+  extensionId,
 )
+await cp(path.join(root, '.tmp', 'package'), staticExtensionDir, {
+  recursive: true,
+  force: true,
+})
 
 const html = await readFile(path.join(root, 'dist', 'index.html'), 'utf8')
 // Select the board before view activation; the host otherwise restores Explorer.
@@ -153,6 +172,19 @@ for (const route of ['boards', 'board']) {
   await writeFile(path.join(boardPath, 'index.html'), boardHtml)
 }
 
+// The editor's installed Board extension leaves this command to Chat.
+await buildStandaloneBoardWorker(
+  join(staticExtensionDir, 'dist', 'boardWorkerMain.js'),
+)
+const extensionManifestFile = join(staticExtensionDir, 'extension.json')
+const extensionManifest = await readJson<BoardExtensionManifest>(
+  extensionManifestFile,
+)
+await writeFile(
+  extensionManifestFile,
+  JSON.stringify(addIdeCommand(extensionManifest), null, 2) + '\n',
+)
+
 await assertStaticBoardExtension(commitHash)
 
 // In the focused board layout the default shortcut opens chat search.
@@ -164,7 +196,10 @@ const boardKeybindings = [
 // The standalone workbench must never activate a bundled chat extension.
 for (const manifest of ['extensions.json', 'webExtensions.json']) {
   const file = path.join(root, 'dist', commitHash, 'config', manifest)
-  const entries = await readJson<readonly Record<string, unknown>[]>(file)
+  const entries =
+    await readJson<
+      readonly (BoardExtensionManifest & { readonly id: string })[]
+    >(file)
   await writeFile(
     file,
     JSON.stringify(
@@ -175,7 +210,7 @@ for (const manifest of ['extensions.json', 'webExtensions.json']) {
         )
         .map((entry) =>
           entry.id === extensionId
-            ? { ...entry, keybindings: boardKeybindings }
+            ? { ...addIdeCommand(entry), keybindings: boardKeybindings }
             : entry,
         ),
       null,

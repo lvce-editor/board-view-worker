@@ -9,6 +9,7 @@
       "entry": [
         "src/boardWorkerMain.ts",
         "src/descriptionMarkdownWorkerMain.ts",
+        "src/standaloneBoardWorkerMain.ts",
         "test/**/*.test.ts"
       ],
       "project": ["src/**/*.ts", "test/**/*.ts"]
