@@ -672,7 +672,7 @@ test('groups cards without dropping empty columns', () => {
   expect(JSON.stringify(dom)).toContain('BoardCardCover')
   expect(JSON.stringify(dom)).toContain(coverImage.url)
   expect(JSON.stringify(dom)).toContain('A task')
-  const readColumnText = (className: string) =>
+  const readColumnText = (className: string): readonly (string | undefined)[] =>
     dom.flatMap((node, index) =>
       node.className === className ? [dom[index + 1].text] : [],
     )
