@@ -33,6 +33,7 @@ export const testBoardSelection = async (
   const releasePhoto = Promise.withResolvers<void>()
   const releaseRevalidation = Promise.withResolvers<void>()
   let holdRevalidation = false
+  let pendingInitialBoard: Readonly<Promise<void>> | undefined
   const releaseImage = Promise.withResolvers<void>()
   const releaseComment = Promise.withResolvers<void>()
   const commentRequests: string[] = []
@@ -182,6 +183,7 @@ export const testBoardSelection = async (
         'lazy',
       )
       boardLoads.push(path)
+      await pendingInitialBoard
       const id = path.split('/').at(-1)
       body = {
         cards: [
@@ -1852,7 +1854,24 @@ export const testBoardSelection = async (
     homeBoardUrl.search = homeUrl.search
     homeBoardUrl.hash = '#22222222'
     await page.waitForURL(homeBoardUrl.href)
-    await page.reload()
+    const initialBoard = Promise.withResolvers<void>()
+    pendingInitialBoard = initialBoard.promise
+    try {
+      await page.reload()
+      await page
+        .locator('.BoardStatus')
+        .filter({ hasText: 'Loading…' })
+        .waitFor()
+      assert.equal(
+        await page
+          .getByRole('button', { exact: true, name: 'Connect Trello' })
+          .count(),
+        0,
+      )
+    } finally {
+      pendingInitialBoard = undefined
+      initialBoard.resolve()
+    }
     await page
       .getByRole('heading', { exact: true, name: 'Engineering' })
       .waitFor()

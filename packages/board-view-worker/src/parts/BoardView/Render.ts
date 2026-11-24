@@ -1194,6 +1194,7 @@ const renderCoverAuthorization = (state: BoardState): readonly Dom.Node[] => {
 export const render = (state: BoardState): Dom.Node => {
   const {
     board,
+    boardId,
     discoveringBoards,
     draggedCardId,
     dropTargetId,
@@ -1244,7 +1245,9 @@ export const render = (state: BoardState): Dom.Node => {
   const cardDialog = renderCardDialog(state)
   const errorNode = renderError(state)
   const setup =
-    board || (discoveringBoards && loading) ? [] : [renderSetup(state)]
+    board || (loading && (boardId || discoveringBoards))
+      ? []
+      : [renderSetup(state)]
   return Dom.node(
     VirtualDomElements.Div,
     {
