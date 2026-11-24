@@ -65,11 +65,24 @@ export const testBoardSelection = async (
   const createRequests: { idList: string; name: string }[] = []
   const authPath = '/auth/trello/connect'
   const coverAuthPath = '/auth/trello/covers/connect'
+  const visibleCoverPath = '/auth/trello/covers/image/nonce.tag.visible'
+  const offscreenCoverPath = '/auth/trello/covers/image/nonce.tag.offscreen'
+  const visibleCover = {
+    attachmentId: '111111111111111111111111',
+    expiresAt: Date.now() + 900_000,
+    grant: 'test-grant',
+    path: visibleCoverPath,
+  }
+  const offscreenCover = {
+    ...visibleCover,
+    attachmentId: '222222222222222222222222',
+    path: offscreenCoverPath,
+  }
   let coversConnected = false
   const discoveryLoads: string[] = []
   const proxiedLoads: string[] = []
   const boardLoads: string[] = []
-  const coverLoads: string[] = []
+  const coverRequests: string[] = []
   const moveRequests: string[] = []
   const cardEdits: { desc: string; name: string }[] = []
   const initialListId = 'bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -98,6 +111,17 @@ export const testBoardSelection = async (
       await route.fulfill({
         body: 'Trello cover images connected.',
         contentType: 'text/plain',
+      })
+      return
+    }
+    if (path === visibleCoverPath || path === offscreenCoverPath) {
+      assert.equal(route.request().resourceType(), 'image')
+      assert.equal(route.request().headers().authorization, undefined)
+      coverRequests.push(path)
+      await route.fulfill({
+        body: pastedImage,
+        contentType: 'image/png',
+        headers: { 'Cross-Origin-Resource-Policy': 'cross-origin' },
       })
       return
     }
@@ -142,22 +166,11 @@ export const testBoardSelection = async (
       }
     } else if (path.endsWith('/token')) {
       body = { accessToken: 'trello-test' }
-    } else if (
-      /^\/api\/integrations\/trello\/boards\/[^/]+\/covers$/u.test(path)
-    ) {
-      coverLoads.push(path)
-      if (!coversConnected) {
-        status = 409
-        body = { code: 'TRELLO_COVER_CONNECTION_REQUIRED' }
-      } else
-        body = [
-          {
-            coverDataUrl:
-              'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nmL8AAAAASUVORK5CYII=',
-            id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
-          },
-        ]
     } else if (/^\/api\/integrations\/trello\/boards\/[^/]+$/u.test(path)) {
+      assert.equal(
+        new URL(route.request().url()).searchParams.get('covers'),
+        'lazy',
+      )
       boardLoads.push(path)
       const id = path.split('/').at(-1)
       body = {
@@ -170,6 +183,7 @@ export const testBoardSelection = async (
                     attachments: attachmentUploaded ? 2 : 1,
                     comments: 3,
                   },
+                  ...(coversConnected && { coverImage: visibleCover }),
                   id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
                   idList: coveredCardListId,
                   labels: [
@@ -193,14 +207,17 @@ export const testBoardSelection = async (
             name: externalCardEdit ? 'Edited in Trello' : 'No activity',
             pos: 2,
           },
-          ...Array.from({ length: 20 }, (_, index) => ({
+          ...Array.from({ length: 70 }, (_, index) => ({
             badges: { attachments: 0, comments: 0 },
+            ...(coversConnected &&
+              index === 69 && { coverImage: offscreenCover }),
             id: `long-list-card-${index}`,
             idList: 'dddddddddddddddddddddddd',
             name: `Long list card ${index}`,
             pos: index + 1,
           })),
         ],
+        coverConnectionRequired: !coversConnected,
         id,
         lists: [
           { id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Todo', pos: 1 },
@@ -692,6 +709,7 @@ export const testBoardSelection = async (
     })
     await connectCovers.waitFor()
     assert.equal(await page.locator('.BoardCardCover').count(), 0)
+    assert.deepEqual(coverRequests, [])
     await connectCovers.click()
     const coverConsent = context.waitForEvent('page')
     await page.getByRole('link', { name: 'Continue to Trello' }).click()
@@ -703,6 +721,17 @@ export const testBoardSelection = async (
       return Boolean(cover?.naturalWidth)
     })
     assert.equal(connected, true)
+    const offscreenImage = longCards.locator('.BoardCardCover')
+    assert.equal(await offscreenImage.getAttribute('loading'), 'lazy')
+    assert.deepEqual(coverRequests, [visibleCoverPath])
+    await offscreenImage.scrollIntoViewIfNeeded()
+    await page.waitForFunction(() => {
+      const cover = document.querySelector<HTMLImageElement>(
+        '.BoardCardCover[src$=".offscreen"]',
+      )
+      return Boolean(cover?.naturalWidth)
+    })
+    assert.deepEqual(coverRequests, [visibleCoverPath, offscreenCoverPath])
     await page.reload()
     await page
       .getByRole('heading', { exact: true, name: 'Engineering' })
@@ -714,16 +743,10 @@ export const testBoardSelection = async (
       ),
     )
     assert.deepEqual(proxiedLoads, [])
-    const cover = page.locator('.BoardCardCover')
+    const cover = page.locator('.BoardCardCover[src$=".visible"]')
     await cover.waitFor({ state: 'visible' })
-    assert.deepEqual(coverLoads, [
-      '/api/integrations/trello/boards/22222222/covers',
-      '/api/integrations/trello/boards/22222222/covers',
-      '/api/integrations/trello/boards/22222222/covers',
-    ])
-    const coverSrc = await cover.getAttribute('src')
-    assert.ok(coverSrc)
-    assert.match(coverSrc, /^data:image\/png;base64,/u)
+    assert.equal(await cover.getAttribute('loading'), 'lazy')
+    assert.equal(await cover.getAttribute('src'), backend + visibleCoverPath)
     const labels = page.locator('.BoardCardLabels')
     await labels.waitFor()
     assert.equal(await labels.count(), 1)
@@ -1349,7 +1372,7 @@ export const testBoardSelection = async (
       await page.screenshot({ path: process.env.BOARD_REMEMBERED_SCREENSHOT })
     const disconnectedPage = await context.newPage()
     await disconnectedPage.route(
-      `${backend}/api/integrations/trello/boards/22222222`,
+      `${backend}/api/integrations/trello/boards/22222222?covers=lazy`,
       (route) =>
         route.fulfill({
           json: { code: 'TRELLO_CONNECTION_REQUIRED' },

@@ -57,7 +57,6 @@ export interface BoardHost {
   readonly execute: typeof executeCommand
   readonly load: typeof trelloClient.load
   readonly loadCard: typeof trelloClient.loadCard
-  readonly loadCovers: typeof trelloClient.loadCovers
   readonly loadDescriptionImages: typeof trelloClient.loadDescriptionImages
   readonly moveCard: typeof trelloClient.moveCard
   readonly read: typeof getPreference
@@ -137,7 +136,6 @@ const defaultHost: BoardHost = {
   execute: executeCommand,
   load: trelloClient.load,
   loadCard: trelloClient.loadCard,
-  loadCovers: trelloClient.loadCovers,
   loadDescriptionImages: trelloClient.loadDescriptionImages,
   moveCard: trelloClient.moveCard,
   read: getPreference,
@@ -526,49 +524,6 @@ export const createInstance = async (
           faviconController = undefined
       })
   }
-  const loadBoardCovers = async (
-    id: string,
-    signal: Readonly<AbortSignal>,
-    requestGeneration: number,
-  ): Promise<void> => {
-    const isCurrent = (): boolean => {
-      const { boardId } = state
-      return (
-        !disposed &&
-        !signal.aborted &&
-        requestGeneration === generation &&
-        boardId === id
-      )
-    }
-    try {
-      const covers = await host.loadCovers(id, signal)
-      if (!isCurrent() || covers.length === 0) return
-      const current = host.session.get(id)?.board
-      if (!current) return
-      const coverById = new Map(
-        covers.map(({ coverDataUrl, id: cardId }) => [cardId, coverDataUrl]),
-      )
-      const board = {
-        ...current,
-        cards: current.cards.map((card) => {
-          const coverDataUrl = coverById.get(card.id)
-          return coverDataUrl ? { ...card, coverDataUrl } : card
-        }),
-      }
-      host.session.set(id, { board })
-      state = { ...state, board, coverConnectionRequired: false }
-      await notify()
-    } catch (error) {
-      if (
-        isCurrent() &&
-        error instanceof TrelloError &&
-        error.details.code === 'TRELLO_COVER_CONNECTION_REQUIRED'
-      ) {
-        state = { ...state, coverConnectionRequired: true }
-        await notify()
-      }
-    }
-  }
   const connect = async (cardId?: string): Promise<void> => {
     const { board } = state
     cancel(Boolean(board))
@@ -599,14 +554,12 @@ export const createInstance = async (
         board,
         boardId: id,
         connectedIds: ids,
-        coverConnectionRequired: false,
         loading: false,
       }
       rememberBoardNames([{ fullId: board.id, id, name: board.name }])
       const saved = saveBoardPreferences(ids)
       if (card) showCard(card)
       await notify()
-      void loadBoardCovers(id, signal, requestGeneration)
       await syncTab(board.name, board.faviconUrl)
       refreshFavicon(id, board, requestGeneration)
       if (!(await saved)) {
@@ -1239,7 +1192,7 @@ export const createInstance = async (
     }
   }
   const authorizeCovers = async (): Promise<void> => {
-    const { authorizing, board, boardId, loading } = state
+    const { authorizing, board, loading } = state
     if (authorizing || loading || !board) return
     cancel(true)
     const requestGeneration = generation
@@ -1263,15 +1216,7 @@ export const createInstance = async (
       await notify()
       await waitForAuthorization(signal, returnTarget, true)
       if (disposed || generation !== requestGeneration) return
-      state = {
-        ...state,
-        authorizationUrl: undefined,
-        authorizing: false,
-        authorizingCovers: false,
-        coverConnectionRequired: false,
-      }
-      await notify()
-      await loadBoardCovers(boardId, signal, requestGeneration)
+      await connect()
     } catch {
       if (disposed || generation !== requestGeneration) return
       state = {
@@ -1729,27 +1674,45 @@ export const createInstance = async (
     if (signal.aborted || currentBoard !== board || !canRefreshBoard(state))
       return
     const previousById = new Map(board.cards.map((card) => [card.id, card]))
+    const renewBefore = Date.now() + 60_000
     const cards = fresh.cards.map((card) => {
       const previous = previousById.get(card.id)
-      const { coverDataUrl: incomingCover, ...fields } = card
-      const coverDataUrl = incomingCover ?? previous?.coverDataUrl
+      const { coverImage: incomingCover, ...fields } = card
+      const previousCover = previous?.coverImage
+      // Keep the image source stable across board polls while its link is valid.
+      const coverImage =
+        previousCover &&
+        incomingCover?.attachmentId === previousCover.attachmentId &&
+        incomingCover.grant === previousCover.grant &&
+        previousCover.expiresAt > renewBefore
+          ? previousCover
+          : incomingCover
       if (previous) {
-        const { coverDataUrl: previousCover, ...previousFields } = previous
+        const { coverImage: _previousCover, ...previousFields } = previous
         if (
-          coverDataUrl === previousCover &&
+          coverImage === previousCover &&
           JSON.stringify(fields) === JSON.stringify(previousFields)
         )
           return previous
       }
-      return coverDataUrl ? { ...card, coverDataUrl } : card
+      return coverImage && coverImage !== incomingCover
+        ? { ...card, coverImage }
+        : card
     })
     if (
       cards.length === board.cards.length &&
       cards.every((card, index) => card === board.cards[index]) &&
+      fresh.coverConnectionRequired === board.coverConnectionRequired &&
       JSON.stringify(fresh.lists) === JSON.stringify(board.lists)
     )
       return
-    const updated = { ...board, cards, lists: fresh.lists }
+    const { coverConnectionRequired: _previousConnection, ...current } = board
+    const updated = {
+      ...current,
+      cards,
+      ...(fresh.coverConnectionRequired && { coverConnectionRequired: true }),
+      lists: fresh.lists,
+    }
     host.session.set(boardId, { board: updated })
     state = { ...state, board: updated }
     const { details, editingCard } = state
