@@ -732,6 +732,39 @@ export const testBoardSelection = async (
         (await columns.nth(1).boundingBox())!.height < longColumnBox.height,
       'Empty and short columns remain content-sized',
     )
+    const emptyListNotice = emptyColumn.getByText('No cards', { exact: true })
+    const emptyListAdd = emptyColumn.getByRole('button', {
+      name: 'Add a card to Doing',
+    })
+    const emptyListTitle = emptyColumn.getByRole('textbox', {
+      name: 'Card title',
+    })
+    const emptyListFooter = await emptyListAdd.boundingBox()
+    await emptyListNotice.waitFor()
+    await emptyListAdd.press('Enter')
+    await emptyListTitle.waitFor()
+    await emptyListNotice.waitFor({ state: 'detached' })
+    assert.equal(
+      await emptyListTitle.getAttribute('placeholder'),
+      'Enter a card title',
+    )
+    const emptyListTitleBox = await emptyListTitle.boundingBox()
+    assert.ok(
+      emptyListFooter &&
+        emptyListTitleBox &&
+        emptyListTitleBox.x === emptyListFooter.x &&
+        emptyListTitleBox.width === emptyListFooter.width,
+      'The card title field aligns with the list footer',
+    )
+    assert.ok(
+      await emptyColumn
+        .getByRole('button', { name: 'Add card', exact: true })
+        .isDisabled(),
+    )
+    await emptyColumn
+      .getByRole('button', { name: 'Cancel', exact: true })
+      .click()
+    await emptyListNotice.waitFor()
     assert.ok(boardLoads.includes('/api/integrations/trello/boards/22222222'))
     assert.equal(
       await page.locator('.BoardViewTrello').evaluate(
