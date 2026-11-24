@@ -444,14 +444,19 @@ const boardCacheEntry = async (
   return cache && credential ? { cache, credential, key } : undefined
 }
 
-const pickerCacheEntry = (config: Readonly<BackendConfiguration>) =>
+const pickerCacheEntry = (
+  config: Readonly<BackendConfiguration>,
+): ReturnType<typeof boardCacheEntry> =>
   boardCacheEntry(
     config,
     '/api/integrations/trello/board-picker-cache',
     boardPickerCache,
   )
 
-const snapshotEntry = (config: Readonly<BackendConfiguration>, id: string) =>
+const snapshotEntry = (
+  config: Readonly<BackendConfiguration>,
+  id: string,
+): ReturnType<typeof boardCacheEntry> =>
   boardCacheEntry(
     config,
     `/api/integrations/trello/boards/${id}?covers=lazy`,
@@ -625,7 +630,7 @@ export const createTrelloClient = (
         redirect: 'error',
         signal: requestSignal,
       })
-    let accessToken = config.accessToken
+    let { accessToken } = config
     let response = await send(accessToken)
     if (response.status === 401 && config.refreshAccessToken) {
       const token = await config.refreshAccessToken()
@@ -853,7 +858,7 @@ export const createTrelloClient = (
       id: data.id,
       lists: data.lists
         .map(({ id, name, pos }) => ({ id, name, pos }))
-        .toSorted((a, b) => a.pos - b.pos),
+        .toSorted((a: TrelloList, b: TrelloList) => a.pos - b.pos),
       name: data.name,
     }
   }
