@@ -155,6 +155,12 @@ for (const route of ['boards', 'board']) {
 
 await assertStaticBoardExtension(commitHash)
 
+// In the focused board layout the default shortcut opens chat search.
+const boardKeybindings = [
+  { command: 'QuickPick.showCommands', key: 'F1' },
+  { command: 'QuickPick.showCommands', key: 'CtrlCmd+Shift+P' },
+]
+
 // The standalone workbench must never activate a bundled chat extension.
 for (const manifest of ['extensions.json', 'webExtensions.json']) {
   const file = path.join(root, 'dist', commitHash, 'config', manifest)
@@ -162,10 +168,16 @@ for (const manifest of ['extensions.json', 'webExtensions.json']) {
   await writeFile(
     file,
     JSON.stringify(
-      entries.filter(
-        (entry) =>
-          entry.id !== 'builtin.chat-view-2' && entry.id !== 'builtin.chat',
-      ),
+      entries
+        .filter(
+          (entry) =>
+            entry.id !== 'builtin.chat-view-2' && entry.id !== 'builtin.chat',
+        )
+        .map((entry) =>
+          entry.id === extensionId
+            ? { ...entry, keybindings: boardKeybindings }
+            : entry,
+        ),
       null,
       2,
     ) + '\n',
