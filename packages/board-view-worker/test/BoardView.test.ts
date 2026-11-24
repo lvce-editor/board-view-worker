@@ -64,7 +64,6 @@ const createHost = (): BoardHost => ({
     attachments: [],
     desc: id === 'new' ? '' : 'Details',
   })),
-  loadCovers: jest.fn<BoardHost['loadCovers']>().mockResolvedValue([]),
   loadDescriptionImages: async (markdown) => markdown,
   moveCard: jest.fn<BoardHost['moveCard']>().mockResolvedValue(undefined),
   read: jest.fn<BoardHost['read']>().mockResolvedValue([]),
@@ -92,48 +91,19 @@ const createHost = (): BoardHost => ({
     .mockResolvedValue(undefined),
 })
 
-test('renders board before cover loading finishes and merges successful covers', async () => {
-  const host = createHost()
-  const covers =
-    Promise.withResolvers<Awaited<ReturnType<BoardHost['loadCovers']>>>()
-  jest.mocked(host.loadCovers).mockReturnValue(covers.promise)
-  const view = await createInstance(createContext(), host)
-  await flush()
-  await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
-  await flush()
-  await view.handleEvent?.({ name: 'board-select:5k8NLHLh', type: 'click' })
-  await flush()
-  expect(JSON.stringify(await view.render())).toContain('A task')
-  expect(
-    host.session.get('5k8NLHLh')?.board.cards[0]?.coverDataUrl,
-  ).toBeUndefined()
-  covers.resolve([{ coverDataUrl: 'data:image/png;base64,AQID', id: 'one' }])
-  await flush()
-  expect(host.session.get('5k8NLHLh')?.board.cards[0]?.coverDataUrl).toBe(
-    'data:image/png;base64,AQID',
-  )
-  expect(JSON.stringify(await view.render())).toContain('BoardCardCover')
-  view.dispose?.()
+const coverImage = {
+  attachmentId: 'attachment',
+  expiresAt: 900_000,
+  grant: 'grant',
+  url: 'https://backend.test/auth/trello/covers/image/nonce.tag.ticket',
+}
+const withCover = (
+  image: NonNullable<TrelloBoard['cards'][number]['coverImage']>,
+): TrelloBoard => ({
+  ...board,
+  cards: board.cards.map((card) => ({ ...card, coverImage: image })),
 })
 
-test('ignores cover failures after the core board has loaded', async () => {
-  const host = createHost()
-  jest
-    .mocked(host.loadCovers)
-    .mockRejectedValue(new Error('cover request failed'))
-  const view = await createInstance(createContext(), host)
-  await flush()
-  await view.handleEvent?.({ name: 'board-provider:trello', type: 'click' })
-  await flush()
-  await view.handleEvent?.({ name: 'board-select:5k8NLHLh', type: 'click' })
-  await flush()
-  await flush()
-  expect(JSON.stringify(await view.render())).toContain('A task')
-  expect(JSON.stringify(await view.render())).not.toContain(
-    'TRELLO_REQUEST_FAILED',
-  )
-  view.dispose?.()
-})
 const createContext = (): ViewContext => ({
   requestRerender: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
   showContextMenu: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -143,6 +113,36 @@ const createContext = (): ViewContext => ({
 const flush = async (): Promise<void> => {
   await new Promise<void>((resolve) => setImmediate(resolve))
 }
+
+test('keeps cover URLs stable across board polls and renews them before expiry', async () => {
+  jest.useFakeTimers({ doNotFake: ['setImmediate'], now: 0 })
+  const host = createHost()
+  const id = '5k8NLHLh'
+  const initial = { ...coverImage, expiresAt: 85_000 }
+  const renewed = { ...coverImage, url: coverImage.url + '-renewed' }
+  host.session.set(id, { board: withCover(initial) })
+  jest.mocked(host.load).mockResolvedValue(withCover(renewed))
+  const view = await createInstance(createContext(), host)
+  try {
+    await view.handleEvent?.({ name: 'board-select:5k8NLHLh', type: 'click' })
+    await flush()
+    await jest.advanceTimersByTimeAsync(15_000)
+    expect(host.session.get(id)?.board.cards[0]?.coverImage).toBe(initial)
+    await jest.advanceTimersByTimeAsync(15_000)
+    expect(host.session.get(id)?.board.cards[0]?.coverImage).toBe(renewed)
+    jest
+      .mocked(host.load)
+      .mockResolvedValue({ ...board, coverConnectionRequired: true })
+    await jest.advanceTimersByTimeAsync(15_000)
+    expect(host.session.get(id)?.board.cards[0]?.coverImage).toBeUndefined()
+    expect(JSON.stringify(await view.render())).toContain(
+      'Connect Trello cover images',
+    )
+  } finally {
+    view.dispose?.()
+    jest.useRealTimers()
+  }
+})
 
 test('polls the open board, recovers from failure and discards a response after disposal', async () => {
   jest.useFakeTimers({ doNotFake: ['setImmediate'] })
@@ -154,7 +154,7 @@ test('polls the open board, recovers from failure and discards a response after 
     cards: [
       {
         ...board.cards[0],
-        coverDataUrl: 'data:image/png;base64,AQID',
+        coverImage,
         idList: 'empty',
         name: 'External edit',
       },
@@ -599,7 +599,7 @@ test('groups cards without dropping empty columns', () => {
     cards: [
       ...board.cards,
       {
-        coverDataUrl: 'data:image/webp;base64,dGVzdA==',
+        coverImage,
         desc: '',
         id: 'covered',
         idList: 'todo',
@@ -624,7 +624,7 @@ test('groups cards without dropping empty columns', () => {
     dom.filter((node) => String(node.className).includes('BoardCardButton')),
   ).toHaveLength(2)
   expect(JSON.stringify(dom)).toContain('BoardCardCover')
-  expect(JSON.stringify(dom)).toContain('data:image/webp;base64,dGVzdA==')
+  expect(JSON.stringify(dom)).toContain(coverImage.url)
   expect(JSON.stringify(dom)).toContain('A task')
   expect(JSON.stringify(dom)).toContain('Todo (2)')
   expect(JSON.stringify(dom)).toContain('Empty (0)')

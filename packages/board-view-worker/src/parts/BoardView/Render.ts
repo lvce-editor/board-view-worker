@@ -52,7 +52,6 @@ export interface BoardState {
   readonly commentError?: string | undefined
   readonly connectedIds: readonly string[]
   readonly connectedNames: Readonly<Record<string, string>>
-  readonly coverConnectionRequired?: boolean
   readonly descriptionError?: string | undefined
   readonly descriptionRendering?: boolean
   readonly details?: CardDetails | undefined
@@ -1177,9 +1176,8 @@ const renderStatus = (state: BoardState): readonly Dom.Node[] => {
 }
 
 const renderCoverAuthorization = (state: BoardState): readonly Dom.Node[] => {
-  const { authorizing, authorizingCovers, board, coverConnectionRequired } =
-    state
-  if (!board || !coverConnectionRequired || (authorizing && !authorizingCovers))
+  const { authorizing, authorizingCovers, board } = state
+  if (!board?.coverConnectionRequired || (authorizing && !authorizingCovers))
     return []
   return [
     Dom.div(
@@ -1224,13 +1222,14 @@ export const render = (state: BoardState): Dom.Node => {
           onPointerDown: 'handleCardPointerDown',
         },
         [
-          ...(card.coverDataUrl
+          ...(card.coverImage
             ? [
                 Dom.node(VirtualDomElements.Img, {
                   alt: '',
                   className: 'BoardCardCover',
                   loading: 'lazy',
-                  src: card.coverDataUrl,
+                  referrerPolicy: 'no-referrer',
+                  src: card.coverImage.url,
                 }),
               ]
             : []),

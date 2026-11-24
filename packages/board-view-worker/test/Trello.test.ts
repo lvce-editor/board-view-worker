@@ -60,7 +60,7 @@ test('accepts board URLs and IDs, rejecting unrelated URLs', () => {
   )
 })
 
-test('loads board cards and cover images through the authenticated backend', async () => {
+test('loads board cards and cover links through the authenticated backend', async () => {
   const labels = [
     { color: 'yellow', id: 'label-yellow', name: 'In progress' },
     { color: 'red', id: 'label-red', name: 'Urgent' },
@@ -73,7 +73,12 @@ test('loads board cards and cover images through the authenticated backend', asy
       cards: [
         ...board.cards,
         {
-          coverDataUrl: 'data:image/webp;base64,AQID',
+          coverImage: {
+            attachmentId: '507f1f77bcf86cd799439013',
+            expiresAt: 900_000,
+            grant: 'grant',
+            path: '/auth/trello/covers/image/nonce.tag.ticket',
+          },
           id: '507f1f77bcf86cd799439012',
           idList: 'now',
           labels,
@@ -81,6 +86,12 @@ test('loads board cards and cover images through the authenticated backend', asy
           pos: 3,
         },
         {
+          coverImage: {
+            attachmentId: '507f1f77bcf86cd799439013',
+            expiresAt: 900_000,
+            grant: 'grant',
+            path: 'https://example.com/auth/trello/covers/image/nonce.tag.ticket',
+          },
           id: '507f1f77bcf86cd799439014',
           idList: 'now',
           name: 'No cover',
@@ -112,11 +123,16 @@ test('loads board cards and cover images through the authenticated backend', asy
     'Cover',
     'No cover',
   ])
-  expect(result.cards.find((card) => card.name === 'Cover')?.coverDataUrl).toBe(
-    'data:image/webp;base64,AQID',
-  )
   expect(
-    result.cards.find((card) => card.name === 'No cover')?.coverDataUrl,
+    result.cards.find((card) => card.name === 'Cover')?.coverImage,
+  ).toEqual({
+    attachmentId: '507f1f77bcf86cd799439013',
+    expiresAt: 900_000,
+    grant: 'https://backend.test:grant',
+    url: 'https://backend.test/auth/trello/covers/image/nonce.tag.ticket',
+  })
+  expect(
+    result.cards.find((card) => card.name === 'No cover')?.coverImage,
   ).toBeUndefined()
   expect(result.cards.find((card) => card.name === 'Cover')?.labels).toEqual([
     { color: 'yellow', id: 'label-yellow', name: 'In progress' },
@@ -125,34 +141,7 @@ test('loads board cards and cover images through the authenticated backend', asy
   ])
   expect(request).toHaveBeenCalledTimes(1)
   expect(request).toHaveBeenCalledWith(
-    'https://backend.test/api/integrations/trello/boards/5k8NLHLh',
-    expect.objectContaining({
-      credentials: 'omit',
-      headers: { Authorization: 'Bearer lvce-token' },
-    }),
-  )
-  expect(JSON.stringify(request.mock.calls)).not.toContain('AQID')
-})
-
-test('loads successful cover enrichments from the separate backend endpoint', async () => {
-  const request = requestWith([
-    {
-      coverDataUrl: 'data:image/png;base64,AQID',
-      id: '507f1f77bcf86cd799439011',
-    },
-    { coverDataUrl: 'https://example.com/image.png', id: 'bad' },
-  ])
-  const client = createTrelloClient(configuration, request)
-  await expect(
-    client.loadCovers('5k8NLHLh', new AbortController().signal),
-  ).resolves.toEqual([
-    {
-      coverDataUrl: 'data:image/png;base64,AQID',
-      id: '507f1f77bcf86cd799439011',
-    },
-  ])
-  expect(request).toHaveBeenCalledWith(
-    'https://backend.test/api/integrations/trello/boards/5k8NLHLh/covers',
+    'https://backend.test/api/integrations/trello/boards/5k8NLHLh?covers=lazy',
     expect.objectContaining({
       credentials: 'omit',
       headers: { Authorization: 'Bearer lvce-token' },
@@ -473,7 +462,7 @@ test('keeps cards usable when the backend has no cover preview', async () => {
       name: 'Still usable',
     }),
   ])
-  expect(result.cards[0]?.coverDataUrl).toBeUndefined()
+  expect(result.cards[0]?.coverImage).toBeUndefined()
 })
 
 test('accepts empty discovery and rejects malformed board lists', async () => {
