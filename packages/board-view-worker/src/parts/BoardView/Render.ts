@@ -15,6 +15,8 @@ import type {
 import * as Dom from '../VirtualDom/VirtualDom.ts'
 
 const primaryButtonClass = mergeClassNames('BoardButton', 'BoardPrimaryButton')
+const cardTitleInputClass = mergeClassNames('BoardInput', 'BoardCardTitleInput')
+const cancelCardClass = mergeClassNames('BoardButton', 'BoardCancelCard')
 const cardButtonClass = mergeClassNames('BoardCard', 'BoardCardButton')
 const descriptionInputClass = mergeClassNames(
   'BoardInput',
@@ -80,28 +82,6 @@ export interface BoardState {
   readonly searchResults?: readonly TrelloSearchResult[]
 }
 
-const input = (
-  name: string,
-  label: string,
-  value?: string,
-  disabled = false,
-): Dom.Node =>
-  Dom.node(VirtualDomElements.Label, { className: 'BoardField' }, [
-    Dom.textNode(label),
-    Dom.node(VirtualDomElements.Input, {
-      ariaLabel: label,
-      autoComplete: 'off',
-      className: 'BoardInput',
-      ...(disabled && { disabled: true }),
-      inputType: 'text',
-      name,
-      ...(name === 'board-card-title' && { onBlur: 'handleBlur' }),
-      onInput: 'handleInput',
-      spellcheck: false,
-      ...(value !== undefined && { value }),
-    }),
-  ])
-
 const authorizationActions = (
   state: Readonly<BoardState>,
   action: string,
@@ -147,7 +127,19 @@ const renderComposer = (
       },
     )
   return Dom.form('board-create-card', 'BoardCardComposer', [
-    input('board-card-title', 'Card title', draft.title, draft.saving || busy),
+    Dom.node(VirtualDomElements.Input, {
+      ariaLabel: 'Card title',
+      autoComplete: 'off',
+      className: cardTitleInputClass,
+      disabled: draft.saving || busy,
+      inputType: 'text',
+      name: 'board-card-title',
+      onBlur: 'handleBlur',
+      onInput: 'handleInput',
+      placeholder: 'Enter a card title',
+      spellcheck: false,
+      value: draft.title,
+    }),
     ...(draft.error
       ? [
           Dom.node(
@@ -183,7 +175,7 @@ const renderComposer = (
         },
         [Dom.textNode(draft.saving ? 'Adding…' : 'Add card')],
       ),
-      Dom.button('board-cancel-card', 'Cancel', 'BoardButton', {
+      Dom.button('board-cancel-card', 'Cancel', cancelCardClass, {
         disabled: draft.saving || busy,
       }),
     ]),
@@ -989,8 +981,9 @@ const renderColumns = (
   board: TrelloBoard,
   cardsByList: Readonly<ReadonlyMap<string, readonly Readonly<Dom.Node>[]>>,
   dropTargetId?: string,
-): Dom.Node =>
-  Dom.node(
+): Dom.Node => {
+  const { cardDraft } = state
+  return Dom.node(
     VirtualDomElements.Div,
     { ariaLabel: board.name, className: 'BoardColumns', tabIndex: 0 },
     board.lists.map((list) =>
@@ -1023,15 +1016,17 @@ const renderColumns = (
           ]),
           Dom.div(
             'BoardCards',
-            cardsByList.get(list.id) || [
-              Dom.div('BoardEmptyList', [Dom.textNode('No cards')]),
-            ],
+            cardsByList.get(list.id) ||
+              (cardDraft?.listId === list.id
+                ? []
+                : [Dom.div('BoardEmptyList', [Dom.textNode('No cards')])]),
           ),
           renderComposer(state, list.id, list.name),
         ],
       ),
     ),
   )
+}
 
 const renderToolbar = (state: BoardState): Dom.Node => {
   const { board, cardDraft, loading, optionsOpen } = state
