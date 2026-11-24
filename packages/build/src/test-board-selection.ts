@@ -33,6 +33,7 @@ export const testBoardSelection = async (
   const releasePhoto = Promise.withResolvers<void>()
   const releaseRevalidation = Promise.withResolvers<void>()
   let holdRevalidation = false
+  let pendingInitialBoard: Readonly<Promise<void>> | undefined
   const releaseImage = Promise.withResolvers<void>()
   const releaseComment = Promise.withResolvers<void>()
   const commentRequests: string[] = []
@@ -172,6 +173,7 @@ export const testBoardSelection = async (
         'lazy',
       )
       boardLoads.push(path)
+      await pendingInitialBoard
       const id = path.split('/').at(-1)
       body = {
         cards: [
@@ -1851,19 +1853,12 @@ export const testBoardSelection = async (
     homeBoardUrl.hash = '#22222222'
     await page.waitForURL(homeBoardUrl.href)
     const initialBoard = Promise.withResolvers<void>()
-    await page.route(
-      `${backend}/api/integrations/trello/boards/22222222?covers=lazy`,
-      async (route) => {
-        await initialBoard.promise
-        await route.fallback()
-      },
-      { times: 1 },
-    )
+    pendingInitialBoard = initialBoard.promise
     try {
       await page.reload()
       await page
         .locator('.BoardStatus')
-        .getByText('Loading…', { exact: true })
+        .filter({ hasText: 'Loading…' })
         .waitFor()
       assert.equal(
         await page
@@ -1872,6 +1867,7 @@ export const testBoardSelection = async (
         0,
       )
     } finally {
+      pendingInitialBoard = undefined
       initialBoard.resolve()
     }
     await page
