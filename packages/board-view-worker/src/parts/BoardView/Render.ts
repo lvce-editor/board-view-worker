@@ -1185,7 +1185,7 @@ const renderCoverAuthorization = (state: BoardState): readonly Dom.Node[] => {
       authorizationActions(
         state,
         'board-authorize-covers',
-        'Connect Trello cover images',
+        'Connect Trello images',
       ),
     ),
   ]

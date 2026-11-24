@@ -553,14 +553,14 @@ export const createTrelloClient = (
       // Cache Storage is best-effort.
     }
   }
-  const call = async (
+  const callResponse = async (
     path: string,
     signal: Readonly<AbortSignal>,
     method = 'GET',
     body?: unknown,
     mapError: (status: number) => BoardError = boardError,
     configOverride?: Readonly<BackendConfiguration>,
-  ): Promise<{ data: unknown; baseUrl: string }> => {
+  ): Promise<{ response: Response; baseUrl: string }> => {
     const config = configOverride ?? (await configuration())
     if (!config.baseUrl || !config.accessToken)
       throw new TrelloError({
@@ -597,13 +597,35 @@ export const createTrelloClient = (
     }
     if (!response.ok)
       throw new TrelloError(await getResponseError(response, mapError))
+    return { baseUrl: config.baseUrl, response }
+  }
+  const call = async (
+    ...args: Readonly<Parameters<typeof callResponse>>
+  ): Promise<{ data: unknown; baseUrl: string }> => {
+    const { baseUrl, response } = await callResponse(...args)
     return {
-      baseUrl: config.baseUrl,
+      baseUrl,
       data:
         response.status === 204
           ? undefined
           : ((await response.json()) as unknown),
     }
+  }
+  const downloadAttachment = async (
+    source: string,
+    signal: Readonly<AbortSignal>,
+    config: Readonly<BackendConfiguration>,
+  ): Promise<Response> => {
+    const path = new URL(source).pathname
+    const { response } = await callResponse(
+      `attachment-image?${new URLSearchParams({ path })}`,
+      signal,
+      'GET',
+      undefined,
+      boardError,
+      config,
+    )
+    return response
   }
   const status = async (
     signal: Readonly<AbortSignal>,
@@ -792,6 +814,7 @@ export const createTrelloClient = (
     attachment: CardAttachment,
     token: string,
     signal: Readonly<AbortSignal>,
+    config: Readonly<BackendConfiguration>,
   ): Promise<CardAttachment> => {
     if (!attachment.previewUrl) return attachment
     const image = await loadImage(
@@ -799,6 +822,8 @@ export const createTrelloClient = (
       async () => token,
       signal,
       request,
+      (source, downloadSignal) =>
+        downloadAttachment(source, downloadSignal, config),
     )
     return image ? { ...attachment, previewSrc: image.src } : attachment
   }
@@ -817,7 +842,8 @@ export const createTrelloClient = (
         fields: 'desc',
       })}`
       const revision = cacheRevision
-      const token = await getTrelloAccessToken(signal)
+      const config = await configuration()
+      const token = await getTrelloAccessToken(signal, config)
       signal.throwIfAborted()
       const previews = new Map<string, Promise<CardAttachment>>()
       const prepareDetails = async (
@@ -830,7 +856,7 @@ export const createTrelloClient = (
             if (!previewUrl) return attachment
             let pending = previews.get(previewUrl)
             if (!pending) {
-              pending = loadAttachmentPreview(attachment, token, signal)
+              pending = loadAttachmentPreview(attachment, token, signal, config)
               previews.set(previewUrl, pending)
             }
             const { previewSrc } = await pending
@@ -898,7 +924,8 @@ export const createTrelloClient = (
     }
     const body = new FormData()
     body.set('file', file)
-    const token = await getTrelloAccessToken(signal)
+    const config = await configuration()
+    const token = await getTrelloAccessToken(signal, config)
     const data = await trelloRequest(
       `cards/${id}/attachments?setCover=false`,
       signal,
@@ -920,7 +947,8 @@ export const createTrelloClient = (
     )
     await invalidateCard(id)
     const attachment = normalizeAttachment(Array.isArray(data) ? data[0] : data)
-    if (attachment) return loadAttachmentPreview(attachment, token, signal)
+    if (attachment)
+      return loadAttachmentPreview(attachment, token, signal, config)
     throw new TrelloError({
       code: 'TRELLO_INVALID_RESPONSE',
       message:
@@ -1258,12 +1286,28 @@ export const createTrelloClient = (
     load,
     loadCard,
     loadDescriptionImages(markdown, signal): Promise<Node> {
-      let token: Promise<string> | undefined
+      const connect = async (): Promise<{
+        readonly config: BackendConfiguration
+        readonly token: string
+      }> => {
+        const config = await configuration()
+        return { config, token: await getTrelloAccessToken(signal, config) }
+      }
+      let pending: ReturnType<typeof connect> | undefined
+      const connection = (): ReturnType<typeof connect> =>
+        (pending ??= connect())
       return loadDescriptionImages(
         markdown,
-        () => (token ??= getTrelloAccessToken(signal)),
+        async () => {
+          const { token } = await connection()
+          return token
+        },
         signal,
         request,
+        async (source, downloadSignal) => {
+          const { config } = await connection()
+          return downloadAttachment(source, downloadSignal, config)
+        },
       )
     },
     moveCard,

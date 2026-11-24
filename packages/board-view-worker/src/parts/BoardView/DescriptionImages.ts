@@ -62,11 +62,17 @@ interface PreparedImage {
   readonly style: string
 }
 
+type AttachmentDownload = (
+  url: string,
+  signal: Readonly<AbortSignal>,
+) => Promise<Response>
+
 export const loadImage = async (
   src: string,
   getToken: () => Promise<string>,
   signal: Readonly<AbortSignal>,
   request: typeof fetch,
+  downloadAttachment?: AttachmentDownload,
 ): Promise<PreparedImage | undefined> => {
   try {
     const downloadUrl = trelloImageUrl(src)
@@ -76,16 +82,30 @@ export const loadImage = async (
       ? await cacheRequestUrl(downloadUrl || src, token)
       : undefined
     const cached = await readCardCache(cache, key)
-    const response =
-      cached ??
-      (await request(downloadUrl || src, {
-        credentials: 'omit',
-        ...(token && { headers: { Authorization: `Bearer ${token}` } }),
-        referrerPolicy: 'no-referrer',
-        signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
-      }))
-    const mime = response.headers.get('content-type')?.split(';', 1)[0]
-    if (!response.ok || !response.body || !mime || !imageMimePattern.test(mime))
+    let response = cached
+    if (!response) {
+      try {
+        response = await request(downloadUrl || src, {
+          credentials: 'omit',
+          ...(token && { headers: { Authorization: `Bearer ${token}` } }),
+          referrerPolicy: 'no-referrer',
+          signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+        })
+      } catch {
+        // Trello's protected downloads can reject the browser's CORS request.
+      }
+      if (!response?.ok && downloadUrl && downloadAttachment) {
+        signal.throwIfAborted()
+        response = await downloadAttachment(downloadUrl, signal)
+      }
+    }
+    const mime = response?.headers.get('content-type')?.split(';', 1)[0]
+    if (
+      !response?.ok ||
+      !response.body ||
+      !mime ||
+      !imageMimePattern.test(mime)
+    )
       return undefined
     const blob = await readImage(response.body, mime)
     if (!blob) return undefined
@@ -117,6 +137,7 @@ export const loadDescriptionImages = async (
   getToken: () => Promise<string>,
   signal: Readonly<AbortSignal>,
   request: typeof fetch,
+  downloadAttachment: AttachmentDownload,
 ): Promise<Node> => {
   const images = new Map<string, Promise<PreparedImage | undefined>>()
   return Promise.all(
@@ -129,7 +150,7 @@ export const loadDescriptionImages = async (
       const { src } = node
       let image = images.get(src)
       if (!image) {
-        image = loadImage(src, getToken, signal, request)
+        image = loadImage(src, getToken, signal, request, downloadAttachment)
         images.set(src, image)
       }
       return {
