@@ -672,8 +672,12 @@ test('groups cards without dropping empty columns', () => {
   expect(JSON.stringify(dom)).toContain('BoardCardCover')
   expect(JSON.stringify(dom)).toContain(coverImage.url)
   expect(JSON.stringify(dom)).toContain('A task')
-  expect(JSON.stringify(dom)).toContain('Todo (2)')
-  expect(JSON.stringify(dom)).toContain('Empty (0)')
+  const readColumnText = (className: string): readonly (string | undefined)[] =>
+    dom.flatMap((node, index) =>
+      node.className === className ? [dom[index + 1].text] : [],
+    )
+  expect(readColumnText('BoardColumnTitle')).toEqual(['Todo', 'Empty'])
+  expect(readColumnText('BoardColumnCount')).toEqual(['2', '0'])
 })
 
 test('saves a title on blur and updates the board after Trello confirms', async () => {

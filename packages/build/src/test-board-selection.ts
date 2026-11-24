@@ -686,6 +686,30 @@ export const testBoardSelection = async (
       ),
     )
     const columns = page.locator('.BoardColumn')
+    for (const [name, total] of [
+      ['Todo', '2'],
+      ['Doing', '0'],
+      ['Done', '70'],
+    ] as const) {
+      const column = page.getByRole('region', { exact: true, name })
+      const title = column.getByRole('heading', { exact: true, name })
+      const count = column.locator('.BoardColumnCount')
+      const menu = column.getByRole('button', {
+        name: `List actions for ${name}`,
+      })
+      assert.equal(await count.textContent(), total)
+      const titleBox = await title.boundingBox()
+      const countBox = await count.boundingBox()
+      const menuBox = await menu.boundingBox()
+      assert.ok(
+        titleBox &&
+          countBox &&
+          menuBox &&
+          titleBox.x + titleBox.width <= countBox.x &&
+          countBox.x + countBox.width <= menuBox.x,
+        'The count sits between the list title and its actions',
+      )
+    }
     const emptyColumn = columns.nth(1)
     const longColumn = columns.nth(2)
     const emptyColumnBox = await emptyColumn.boundingBox()

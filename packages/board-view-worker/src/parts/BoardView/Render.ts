@@ -1005,10 +1005,11 @@ const renderColumns = (
         },
         [
           Dom.div('BoardColumnHeader', [
-            Dom.heading(
-              2,
-              'BoardColumnTitle',
-              `${list.name} (${cardsByList.get(list.id)?.length || 0})`,
+            Dom.heading(2, 'BoardColumnTitle', list.name),
+            Dom.node(
+              VirtualDomElements.Span,
+              { className: 'BoardColumnCount' },
+              [Dom.textNode(String(cardsByList.get(list.id)?.length ?? 0))],
             ),
             Dom.button(
               `list-actions:${list.id}`,
