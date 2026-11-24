@@ -1226,7 +1226,7 @@ export const createInstance = async (
         authorizingCovers: false,
         error: {
           code: 'TRELLO_COVER_CONNECTION_FAILED',
-          message: 'Unable to connect Trello cover images. Try again.',
+          message: 'Unable to connect Trello images. Try again.',
         },
       }
       await notify()

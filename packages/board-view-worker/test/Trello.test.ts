@@ -750,6 +750,7 @@ test('keeps the attachment link if its authenticated preview cannot be loaded', 
       desc: '',
     }),
     new Response(null, { status: 404 }),
+    new Response(null, { status: 404 }),
   ])
   const details = await createTrelloClient(configuration, request).loadCard(
     cardId,
@@ -758,13 +759,20 @@ test('keeps the attachment link if its authenticated preview cannot be loaded', 
   expect(details.attachments).toEqual([
     { name: 'diagram.png', previewUrl, url },
   ])
-  expect(request).toHaveBeenCalledTimes(3)
+  expect(request).toHaveBeenCalledTimes(4)
   expect(request.mock.calls[2]).toEqual([
     previewUrl,
     expect.objectContaining({
       headers: { Authorization: 'Bearer trello-token' },
     }),
   ])
+  const fallback = new URL(request.mock.calls[3]?.[0] as string)
+  expect(fallback.origin).toBe('https://backend.test')
+  expect(fallback.pathname).toBe('/api/integrations/trello/attachment-image')
+  expect(fallback.searchParams.get('path')).toBe(previewPath)
+  expect(request.mock.calls[3]?.[1]?.headers).toEqual({
+    Authorization: 'Bearer lvce-token',
+  })
 })
 
 test('rejects incomplete card detail responses instead of presenting missing data as empty', async () => {

@@ -126,6 +126,16 @@ export const testBoardSelection = async (
       return
     }
     assert.equal(route.request().headers().authorization, 'Bearer board-test')
+    if (path === '/api/integrations/trello/attachment-image') {
+      assert.equal(
+        new URL(route.request().url()).searchParams.get('path'),
+        previewPath,
+      )
+      imageLoads++
+      await releaseImage.promise
+      await route.fulfill({ body: pastedImage, contentType: 'image/png' })
+      return
+    }
     let body: unknown
     let status = 200
     if (route.request().method() === 'PUT') {
@@ -327,17 +337,7 @@ export const testBoardSelection = async (
       return
     }
     if (url.pathname === previewPath) {
-      assert.equal(request.headers().authorization, 'Bearer trello-test')
-      imageLoads++
-      await releaseImage.promise
-      await route.fulfill({
-        body: Buffer.from(
-          'iVBORw0KGgoAAAANSUhEUgAAAAIAAAADCAIAAAA2iEnWAAAAFElEQVR4nGOUKn7BwMDAxMDAgKAAGzUBe6nlFkgAAAAASUVORK5CYII=',
-          'base64',
-        ),
-        contentType: 'image/png',
-        headers: { 'Access-Control-Allow-Origin': '*' },
-      })
+      await route.fulfill({ status: 401 })
       return
     }
     if (url.pathname === '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments') {
@@ -718,7 +718,7 @@ export const testBoardSelection = async (
       'url("https://trello-backgrounds.s3.amazonaws.com/engineering.jpg")',
     )
     const connectCovers = page.getByRole('button', {
-      name: 'Connect Trello cover images',
+      name: 'Connect Trello images',
     })
     await connectCovers.waitFor()
     assert.equal(await page.locator('.BoardCardCover').count(), 0)
@@ -839,7 +839,9 @@ export const testBoardSelection = async (
     await page.getByText('Loading card details…', { exact: true }).waitFor()
     const dialogBeforeDetails = await dialog.count()
     const pendingImage = page.waitForRequest(
-      (request) => new URL(request.url()).pathname === previewPath,
+      (request) =>
+        new URL(request.url()).pathname ===
+        '/api/integrations/trello/attachment-image',
     )
     releaseDetails.resolve()
     await pendingImage

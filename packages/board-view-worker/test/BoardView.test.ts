@@ -136,7 +136,7 @@ test('keeps cover URLs stable across board polls and renews them before expiry',
     await jest.advanceTimersByTimeAsync(15_000)
     expect(host.session.get(id)?.board.cards[0]?.coverImage).toBeUndefined()
     expect(JSON.stringify(await view.render())).toContain(
-      'Connect Trello cover images',
+      'Connect Trello images',
     )
   } finally {
     view.dispose?.()
