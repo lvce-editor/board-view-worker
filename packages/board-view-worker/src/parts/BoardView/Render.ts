@@ -15,6 +15,8 @@ import type {
 import * as Dom from '../VirtualDom/VirtualDom.ts'
 
 const primaryButtonClass = mergeClassNames('BoardButton', 'BoardPrimaryButton')
+const cardTitleInputClass = mergeClassNames('BoardInput', 'BoardCardTitleInput')
+const cancelCardClass = mergeClassNames('BoardButton', 'BoardCancelCard')
 const cardButtonClass = mergeClassNames('BoardCard', 'BoardCardButton')
 const descriptionInputClass = mergeClassNames(
   'BoardInput',
@@ -128,7 +130,7 @@ const renderComposer = (
     Dom.node(VirtualDomElements.Input, {
       ariaLabel: 'Card title',
       autoComplete: 'off',
-      className: mergeClassNames('BoardInput', 'BoardCardTitleInput'),
+      className: cardTitleInputClass,
       disabled: draft.saving || busy,
       inputType: 'text',
       name: 'board-card-title',
@@ -173,14 +175,9 @@ const renderComposer = (
         },
         [Dom.textNode(draft.saving ? 'Adding…' : 'Add card')],
       ),
-      Dom.button(
-        'board-cancel-card',
-        'Cancel',
-        mergeClassNames('BoardButton', 'BoardCancelCard'),
-        {
-          disabled: draft.saving || busy,
-        },
-      ),
+      Dom.button('board-cancel-card', 'Cancel', cancelCardClass, {
+        disabled: draft.saving || busy,
+      }),
     ]),
   ])
 }
