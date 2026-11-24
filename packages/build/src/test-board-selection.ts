@@ -25,6 +25,7 @@ export const testBoardSelection = async (
   const autolinkUrl = 'https://example.com/updates'
   const markdownUrl = 'https://example.com/roadmap'
   const description = `# Card notes\n\nA **detailed description** from Trello.\n\nSee (${pastedUrl}), <${autolinkUrl}>, and [the roadmap](${markdownUrl}).\n\n![Design diagram](https://trello.com${previewPath})`
+  const refreshedDescription = `${description.replace('Card notes', 'Updated card notes')}\n\n## Follow-up\n\nReview the latest design before the next meeting.`
   await context.route(pastedUrl, (route) =>
     route.fulfill({ body: 'Board project', contentType: 'text/plain' }),
   )
@@ -465,9 +466,7 @@ export const testBoardSelection = async (
           ],
           desc:
             savedCardDescription ??
-            (load === 1
-              ? description
-              : description.replace('Card notes', 'Updated card notes')),
+            (load === 1 ? description : refreshedDescription),
         },
       })
       return
@@ -1049,11 +1048,21 @@ export const testBoardSelection = async (
     })
     assert.equal(await cachedTitle.isDisabled(), true)
     assert.equal(await descriptionEdit.isDisabled(), true)
+    const dialogTop = () =>
+      dialog
+        .locator('.BoardDialogHeader')
+        .evaluate((header) => header.getBoundingClientRect().top)
+    const cachedHeaderTop = await dialogTop()
     releaseCardRefresh.resolve()
     await dialog
       .getByText('The design review is complete.', { exact: true })
       .waitFor()
-    await dialog.getByRole('heading', { name: 'Updated card notes' }).waitFor()
+    await dialog.getByRole('heading', { name: 'Follow-up' }).waitFor()
+    assert.equal(
+      await dialogTop(),
+      cachedHeaderTop,
+      'The card header stays in place as the refreshed description grows',
+    )
     assert.equal(
       await dialog.getByText('Please review the attached design.').count(),
       0,
