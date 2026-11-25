@@ -37,6 +37,13 @@
   "rpc": [
     {
       "contentSecurityPolicy": ["default-src 'none'", "script-src 'self'"],
+      "id": "builtin.board-view.card-detail-worker",
+      "name": "Board Card Detail Worker",
+      "type": "web-worker",
+      "url": "dist/cardDetailWorkerMain.js"
+    },
+    {
+      "contentSecurityPolicy": ["default-src 'none'", "script-src 'self'"],
       "id": "builtin.board-view.description-markdown-worker",
       "name": "Board Description Markdown Worker",
       "type": "web-worker",

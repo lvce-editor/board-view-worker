@@ -24,6 +24,9 @@ import {
 } from './CardDetails.ts'
 import { loadDescriptionImages, loadImage } from './DescriptionImages.ts'
 import { loadBackgroundImage } from './LoadBackgroundImage.ts'
+import { TrelloError, type BoardError } from './TrelloError.ts'
+
+export { TrelloError, type BoardError } from './TrelloError.ts'
 
 export interface TrelloCard {
   readonly attachmentCount?: number
@@ -85,17 +88,6 @@ export interface TrelloBoard {
   readonly id: string
   readonly lists: readonly TrelloList[]
   readonly name: string
-}
-
-export interface BoardError {
-  readonly code: string
-  readonly message: string
-}
-
-export class TrelloError extends Error {
-  constructor(readonly details: BoardError) {
-    super(details.message)
-  }
 }
 
 export const isBoardPickerAccessError = (error: unknown): boolean =>
