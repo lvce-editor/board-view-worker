@@ -1882,9 +1882,7 @@ export const createInstance = async (
       ...state,
       board: updated,
       listActionsId:
-        listActionsId && lists.some(({ id }) => id === listActionsId)
-          ? listActionsId
-          : undefined,
+        listActionsId && lists.find(({ id }) => id === listActionsId)?.id,
     }
     if (linkedCardId) restoreLinkedCard(updated, linkedCardId)
     syncRefreshedBoardTab(boardId, board.name, updated, sameFavicon)
