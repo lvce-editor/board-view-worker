@@ -878,6 +878,9 @@
   margin-block: 12px;
   object-fit: contain;
 }
+.BoardCardActionFeedback:empty {
+  display: none;
+}
 .BoardDialogError {
   color: #8c1d18;
   line-height: 1.5;
