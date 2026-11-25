@@ -25,6 +25,24 @@ export const testBoardRoutes = async (
         `${route} should omit the status bar and icon theme workers from preloads`,
       )
       await page.locator('.BoardProviderGrid').waitFor()
+      const heading = page.getByRole('heading', { level: 1, name: 'Boards' })
+      const header = page.locator('.BoardToolbar').filter({ has: heading })
+      assert.equal(
+        await header.evaluate((element) =>
+          getComputedStyle(element).getPropertyValue('app-region'),
+        ),
+        'drag',
+        `${route} overview header should be draggable`,
+      )
+      assert.notEqual(
+        await page
+          .locator('.BoardProviderGrid')
+          .evaluate((element) =>
+            getComputedStyle(element).getPropertyValue('app-region'),
+          ),
+        'drag',
+        `${route} provider controls should stay outside the drag region`,
+      )
       await page.reload()
       await page.locator('.BoardProviderGrid').waitFor()
       assert.deepEqual(errors, [], `${route} route should load without errors`)

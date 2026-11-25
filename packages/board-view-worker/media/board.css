@@ -52,6 +52,8 @@
 }
 .BoardToolbarWithoutBoard {
   grid-template-columns: minmax(0, 1fr);
+  -webkit-app-region: drag;
+  app-region: drag;
 }
 .BoardTitle,
 .BoardBreadcrumb {
