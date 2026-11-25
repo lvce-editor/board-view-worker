@@ -390,7 +390,7 @@ export const createInstance = async (
   let focusDescription = false
   let focusNewCard = false
   let focusRestore = false
-  let focusCardId = ''
+  let focusRestoreName = 'board-overview'
   const notify = async (): Promise<void> => {
     if (!disposed) await context?.requestRerender()
   }
@@ -495,6 +495,7 @@ export const createInstance = async (
         detailsLoading: false,
         editingCard: undefined,
       }),
+      listActionsId: undefined,
       loading: false,
       postingComment: false,
       savingCard: false,
@@ -513,7 +514,7 @@ export const createInstance = async (
   const closeEditor = (): void => {
     const { editingCard } = state
     if (editingCard) {
-      focusCardId = editingCard.id
+      focusRestoreName = `board-card:${editingCard.id}`
       focusRestore = !focusRestore
     }
     state = { ...state, editError: undefined, editingCard: undefined }
@@ -962,7 +963,7 @@ export const createInstance = async (
             ) || [],
         }
         closeEditor()
-        focusCardId = ''
+        focusRestoreName = 'board-overview'
         cancel()
         void notify()
       },
@@ -1415,7 +1416,8 @@ export const createInstance = async (
       !cardDraft?.saving &&
       board?.lists.some((list) => list.id === listId)
     ) {
-      state = { ...state, cardDraft: { listId, saving: false, title: '' } }
+      if (cardDraft?.listId !== listId)
+        state = { ...state, cardDraft: { listId, saving: false, title: '' } }
       focusNewCard = !focusNewCard
     }
   }
@@ -1875,7 +1877,15 @@ export const createInstance = async (
         }
       : board
     host.session.set(boardId, { board: updated })
-    state = { ...state, board: updated }
+    const { listActionsId } = state
+    state = {
+      ...state,
+      board: updated,
+      listActionsId:
+        listActionsId && lists.some(({ id }) => id === listActionsId)
+          ? listActionsId
+          : undefined,
+    }
     if (linkedCardId) restoreLinkedCard(updated, linkedCardId)
     syncRefreshedBoardTab(boardId, board.name, updated, sameFavicon)
     const { details, editingCard } = state
@@ -2275,6 +2285,7 @@ export const createInstance = async (
         editDescription,
         editingCard,
         editingTitle,
+        listActionsId,
         optionsOpen,
       } = state
       if (
@@ -2291,6 +2302,12 @@ export const createInstance = async (
         closeCardActions()
         return
       }
+      if (key === 'Escape' && listActionsId) {
+        state = { ...state, listActionsId: undefined }
+        focusRestoreName = `list-actions:${listActionsId}`
+        focusRestore = !focusRestore
+        return
+      }
       if (key === 'Escape' && optionsOpen) {
         state = { ...state, optionsOpen: false }
         return
@@ -2305,6 +2322,19 @@ export const createInstance = async (
       if (className === 'BoardDialogOverlay') void dismissEditor()
     },
     async handleEvent(event: Readonly<ViewEvent>): Promise<void> {
+      if (event.type === 'click') {
+        const { listActionsId } = state
+        if (event.name?.startsWith('list-actions:')) {
+          const id = event.name.slice('list-actions:'.length)
+          state = {
+            ...state,
+            listActionsId: listActionsId === id ? undefined : id,
+            optionsOpen: false,
+          }
+          return
+        }
+        if (listActionsId) state = { ...state, listActionsId: undefined }
+      }
       if (await handleSearchEvent(event)) return
       if (handleNonClickEvent(event)) return
       if (isCardTitleBlur(event)) {
@@ -2345,9 +2375,7 @@ export const createInstance = async (
       if (oldContext.focusNewCard !== newContext.focusNewCard && cardDraft)
         return '[name="board-card-title"]'
       if (oldContext.focusRestore === newContext.focusRestore) return ''
-      return focusCardId
-        ? `[name="board-card:${focusCardId}"]`
-        : '[name="board-overview"]'
+      return `[name="${focusRestoreName}"]`
     },
     renderTitle: (): string => {
       const { board } = state
