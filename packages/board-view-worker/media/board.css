@@ -499,8 +499,11 @@
   color: var(--BoardMutedForeground);
   font-size: 14px;
 }
-.BoardListActionsButton {
+.BoardListActions {
+  position: relative;
   flex: 0 0 auto;
+}
+.BoardListActionsButton {
   min-width: 32px;
   min-height: 32px;
   padding: 2px 7px 5px;

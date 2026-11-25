@@ -709,6 +709,29 @@ export const testBoardSelection = async (
         'The count sits between the list title and its actions',
       )
     }
+    const todoListActions = page.getByRole('button', {
+      name: 'List actions for Todo',
+    })
+    const doingListActions = page.getByRole('button', {
+      name: 'List actions for Doing',
+    })
+    const todoActions = page.getByRole('group', {
+      name: 'List actions for Todo',
+    })
+    const doingActions = page.getByRole('group', {
+      name: 'List actions for Doing',
+    })
+    await todoListActions.click()
+    await todoActions.waitFor({ timeout: 5000 })
+    assert.equal(await todoListActions.getAttribute('aria-expanded'), 'true')
+    await doingListActions.press('Enter')
+    await todoActions.waitFor({ state: 'hidden' })
+    await doingActions.waitFor()
+    await doingActions.getByRole('button', { name: 'Add card' }).press('Escape')
+    await doingActions.waitFor({ state: 'hidden' })
+    assert.equal(await doingListActions.getAttribute('aria-expanded'), 'false')
+    await doingListActions.and(page.locator(':focus')).waitFor()
+
     const emptyColumn = columns.nth(1)
     const longColumn = columns.nth(2)
     const emptyColumnBox = await emptyColumn.boundingBox()
@@ -764,8 +787,10 @@ export const testBoardSelection = async (
     })
     const emptyListFooter = await emptyListAdd.boundingBox()
     await emptyListNotice.waitFor()
-    await emptyListAdd.press('Enter')
-    await emptyListTitle.waitFor()
+    await doingListActions.click()
+    await doingActions.getByRole('button', { name: 'Add card' }).click()
+    await doingActions.waitFor({ state: 'hidden' })
+    await emptyListTitle.and(page.locator(':focus')).waitFor()
     await emptyListNotice.waitFor({ state: 'detached' })
     assert.equal(
       await emptyListTitle.getAttribute('placeholder'),
@@ -788,6 +813,7 @@ export const testBoardSelection = async (
       .getByRole('button', { name: 'Cancel', exact: true })
       .click()
     await emptyListNotice.waitFor()
+    console.log('List actions: click, keyboard dismissal and Add card: pass')
     assert.ok(boardLoads.includes('/api/integrations/trello/boards/22222222'))
     assert.equal(
       await page.locator('.BoardViewTrello').evaluate(

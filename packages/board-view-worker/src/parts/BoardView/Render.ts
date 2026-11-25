@@ -69,6 +69,7 @@ export interface BoardState {
   readonly editingTitle?: boolean
   readonly editName?: string
   readonly error: BoardError | undefined
+  readonly listActionsId?: string | undefined
   readonly loading: boolean
   readonly optionsOpen?: boolean
   readonly postingComment?: boolean
@@ -977,6 +978,51 @@ const renderError = (state: Readonly<BoardState>): Dom.Node | undefined => {
   )
 }
 
+const renderListActions = (
+  state: Readonly<BoardState>,
+  listId: string,
+  listName: string,
+): Dom.Node => {
+  const { authorizing, cardDraft, listActionsId, loading } = state
+  const expanded = listActionsId === listId
+  const disabled = loading || Boolean(authorizing || cardDraft?.saving)
+  const label = `List actions for ${listName}`
+  return Dom.div(
+    'BoardListActions',
+    [
+      Dom.button(
+        `list-actions:${listId}`,
+        '…',
+        'BoardButton BoardListActionsButton',
+        {
+          ariaExpanded: expanded,
+          ariaLabel: label,
+          disabled,
+          title: 'List actions',
+        },
+      ),
+      ...(expanded
+        ? [
+            Dom.node(
+              VirtualDomElements.Div,
+              {
+                ariaLabel: label,
+                className: 'BoardOverflowMenu',
+                role: 'group',
+              },
+              [
+                Dom.button(`board-add:${listId}`, 'Add card', 'BoardButton', {
+                  disabled,
+                }),
+              ],
+            ),
+          ]
+        : []),
+    ],
+    { onKeyDown: 'handleDialogKeyDown' },
+  )
+}
+
 const renderColumns = (
   state: BoardState,
   board: TrelloBoard,
@@ -1005,15 +1051,7 @@ const renderColumns = (
               { className: 'BoardColumnCount' },
               [Dom.textNode(String(cardsByList.get(list.id)?.length ?? 0))],
             ),
-            Dom.button(
-              `list-actions:${list.id}`,
-              '…',
-              'BoardButton BoardListActionsButton',
-              {
-                ariaLabel: `List actions for ${list.name}`,
-                title: 'List actions',
-              },
-            ),
+            renderListActions(state, list.id, list.name),
           ]),
           Dom.div(
             'BoardCards',
