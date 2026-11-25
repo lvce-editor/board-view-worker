@@ -930,6 +930,17 @@ export const testBoardSelection = async (
       name: 'Card with cover',
     })
     const dialog = page.getByRole('dialog', { name: 'Card details' })
+    const cardDetailWorkers = (): ReturnType<typeof page.workers> =>
+      page
+        .workers()
+        .filter((worker) =>
+          new URL(worker.url()).pathname.endsWith('/cardDetailWorkerMain.js'),
+        )
+    assert.equal(
+      cardDetailWorkers().length,
+      0,
+      'Board overview leaves the card detail worker unloaded',
+    )
     await cardButton.hover()
     await Promise.all([
       page.waitForRequest(
@@ -940,6 +951,11 @@ export const testBoardSelection = async (
       page.mouse.down(),
     ])
     assert.equal(await dialog.count(), 0, 'Pointerdown only starts loading')
+    assert.equal(
+      cardDetailWorkers().length,
+      0,
+      'Pointerdown only prefetches card data',
+    )
     assert.equal(await page.getByText('Loading card details…').count(), 0)
     await page.mouse.up()
     const cardHash = '#22222222/card/aaaaaaaaaaaaaaaaaaaaaaaa'
@@ -962,6 +978,8 @@ export const testBoardSelection = async (
       .getByText('Please review the attached design.', { exact: true })
       .waitFor()
     await dialog.getByRole('heading', { name: 'Card notes' }).waitFor()
+    const [detailWorker] = cardDetailWorkers()
+    assert.ok(detailWorker, 'Opening a card launches the detail worker')
     await dialog.getByText('A detailed description', { exact: false }).waitFor()
     const image = dialog.locator('.BoardDescriptionImage')
     assert.match(
@@ -1198,6 +1216,11 @@ export const testBoardSelection = async (
     await badges.getByRole('img', { exact: true, name: '4 comments' }).waitFor()
     await cardButton.click()
     await dialog.getByText('Comment author', { exact: true }).waitFor()
+    assert.deepEqual(
+      cardDetailWorkers(),
+      [detailWorker],
+      'Reopening a card reuses the detail worker',
+    )
     assert.equal(
       await dialog.locator('.BoardActivityText').first().textContent(),
       commentText,

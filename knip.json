@@ -8,6 +8,7 @@
     "packages/board-view-worker": {
       "entry": [
         "src/boardWorkerMain.ts",
+        "src/cardDetailWorkerMain.ts",
         "src/descriptionMarkdownWorkerMain.ts",
         "src/standaloneBoardWorkerMain.ts",
         "test/**/*.test.ts"

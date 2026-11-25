@@ -17,6 +17,7 @@ export const buildExtension = async (minify: boolean): Promise<void> => {
     ...workerBuildOptions,
     entryPoints: [
       `${extension}/src/boardWorkerMain.ts`,
+      `${extension}/src/cardDetailWorkerMain.ts`,
       `${extension}/src/descriptionMarkdownWorkerMain.ts`,
     ],
     minify,

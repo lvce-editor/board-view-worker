@@ -4,12 +4,19 @@ import type { ViewContext, VirtualDomViewInstance } from '@lvce-editor/api'
 import { expect, jest, test } from '@jest/globals'
 import { createSession } from '../src/parts/BoardView/BoardSession.ts'
 import {
-  createInstance,
+  createInstance as createBoardInstance,
   type BoardHost,
 } from '../src/parts/BoardView/BoardView.ts'
 import { renderDescriptionMarkdown } from '../src/parts/BoardView/DescriptionMarkdown.ts'
 import { render } from '../src/parts/BoardView/Render.ts'
 import { TrelloError, type TrelloBoard } from '../src/parts/BoardView/Trello.ts'
+import { createCardDetail } from '../src/parts/CardDetail/CardDetail.ts'
+
+const createInstance = (
+  context: ViewContext,
+  host: BoardHost,
+): ReturnType<typeof createBoardInstance> =>
+  createBoardInstance(context, host, createCardDetail)
 
 const board: TrelloBoard = {
   cards: [

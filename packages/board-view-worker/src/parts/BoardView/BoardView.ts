@@ -8,19 +8,31 @@ import {
   type ViewEvent,
   type VirtualDomViewInstance,
 } from '@lvce-editor/api'
+import type {
+  CardDetailAction,
+  CardDetailFocus,
+  CardDetailFrame,
+  ConnectCardDetail,
+  DispatchCardDetail,
+} from '../CardDetail/CardDetailProtocol.ts'
 import type { Node } from '../VirtualDom/VirtualDom.ts'
-import type { CardAttachment, CardDetails } from './CardDetails.ts'
+import type { CardDetails } from './CardDetails.ts'
 import {
   getBoardHash,
   getUrl,
   isBoardPath,
   parseBoardHash,
 } from '../BoardUrl/BoardUrl.ts'
+import { connectCardDetail } from '../CardDetail/CardDetailWorker.ts'
 import { getWorkspaceTitle } from '../WorkspaceTitle/WorkspaceTitle.ts'
 import { createBoardFavicon } from './BoardFavicon.ts'
 import { createSession, type BoardSession } from './BoardSession.ts'
 import { renderDescriptionMarkdown } from './DescriptionMarkdownWorker.ts'
 import { render, type BoardState } from './Render.ts'
+import {
+  renderCardLoading,
+  renderCardStartupError,
+} from './RenderCardLoading.ts'
 import {
   boardIdPattern,
   isBoardPickerAccessError,
@@ -42,34 +54,30 @@ const hostedBoardUrl = 'https://lvce-editor.github.io/board-view-worker/boards/'
 const hostedBoardPath = new URL(hostedBoardUrl).pathname
 const hostedHomePath = new URL('..', hostedBoardUrl).pathname
 const boardRefreshInterval = 15_000
-const markdownImageAltCharacters = /[[\]\\\r\n]/gu
-
-interface DescriptionSelection {
-  readonly end: number
-  readonly start: number
-}
-
-const insertDescriptionImage = (
-  text: string,
-  { end, start }: DescriptionSelection,
-  attachment: CardAttachment,
-): { readonly text: string; readonly selection: DescriptionSelection } => {
-  const before = text.slice(0, start)
-  const after = text.slice(end)
-  const alt =
-    attachment.name.replaceAll(markdownImageAltCharacters, '') || 'Image'
-  const url = attachment.url.replaceAll('(', '%28').replaceAll(')', '%29')
-  const prefix = before && !before.endsWith('\n\n') ? '\n\n' : ''
-  const suffix = after && !after.startsWith('\n\n') ? '\n\n' : ''
-  const inserted = `${before}${prefix}![${alt}](${url})`
-  return {
-    selection: { end: inserted.length, start: inserted.length },
-    text: inserted + suffix + after,
-  }
-}
-
 const isCardTitleBlur = (event: Readonly<ViewEvent>): boolean =>
   event.type === 'blur' && event.name === 'board-card-title'
+
+const cardDetailEvents = new Set([
+  'board-card-actions',
+  'board-card-archive',
+  'board-card-cancel',
+  'board-card-copy-link',
+  'board-card-details-retry',
+  'board-card-move',
+  'board-card-save-retry',
+  'board-card-title-edit',
+  'board-comment-text',
+  'board-description-edit',
+  'board-description-retry',
+  'board-post-comment',
+  'edit-card-desc',
+  'edit-card-name',
+])
+
+const isCardDetailEvent = (name: string | undefined): boolean =>
+  Boolean(
+    name && (cardDetailEvents.has(name) || name.startsWith('board-card-move:')),
+  )
 
 export interface BoardHost {
   readonly addAttachment: typeof trelloClient.addAttachment
@@ -107,9 +115,9 @@ type LoadPrefetchedCard = (
 ) => Promise<CardDetails | undefined>
 
 interface CardPrefetch {
+  readonly abort: () => void
   readonly completedAt: number | undefined
   readonly consume: LoadPrefetchedCard
-  readonly controller: AbortController
   readonly id: string
 }
 
@@ -276,6 +284,7 @@ const readConnectedNames = async (
 export const createInstance = async (
   context?: ViewContext,
   host: BoardHost = defaultHost,
+  connectDetail: ConnectCardDetail = connectCardDetail,
 ): Promise<BoardViewInstance> => {
   const connectedIds = await readConnectedIds(host.read)
   const connectedNames = await readConnectedNames(host.read, connectedIds)
@@ -317,16 +326,11 @@ export const createInstance = async (
   let controller: AbortController | undefined
   let boardRefreshController: AbortController | undefined
   let boardRefreshTimer: ReturnType<typeof setTimeout> | undefined
-  let detailsController: AbortController | undefined
   let faviconController: AbortController | undefined
   let searchController: AbortController | undefined
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   let searchGeneration = 0
-  let descriptionGeneration = 0
-  let attachmentUpload: Promise<void> | undefined
-  let cardSave: Promise<boolean> | undefined
-  let pendingDescriptionKey: string | undefined
-  let cardMutationController: AbortController | undefined
+  let dragMutationController: AbortController | undefined
   let cardPrefetch: CardPrefetch | undefined
   let disposed = false
   let preferenceWrite = Promise.resolve(true)
@@ -383,80 +387,56 @@ export const createInstance = async (
   }
   const { board: initialBoard } = state
   await syncTab(initialBoard?.name || 'Boards', initialBoard?.faviconUrl)
-  let focusCardActions = false
-  let focusEditor = false
-  let focusComment = false
-  let focusCardTitle = false
-  let focusDescription = false
+  let detailFocus: CardDetailFocus = {
+    focusCardActions: false,
+    focusCardTitle: false,
+    focusComment: false,
+    focusDescription: false,
+    focusEditor: false,
+  }
+  let detailFrame: CardDetailFrame | undefined
+  let detailSession:
+    | {
+        readonly dispatch: DispatchCardDetail
+        readonly controller: AbortController
+        pending: number
+      }
+    | undefined
+  let detailStartupFailed = false
   let focusNewCard = false
   let focusRestore = false
   let focusRestoreName = 'board-overview'
   const notify = async (): Promise<void> => {
     if (!disposed) await context?.requestRerender()
   }
-  const prepareDescription = async (
-    text: string,
-    signal: Readonly<AbortSignal>,
-  ): Promise<
-    Pick<
-      BoardState,
-      'descriptionError' | 'renderedDescription' | 'renderedDescriptionText'
-    >
-  > => {
-    if (!text) return {}
-    try {
-      const markdown = await host.renderDescriptionMarkdown(text)
-      signal.throwIfAborted()
-      return {
-        renderedDescription: await host.loadDescriptionImages(markdown, signal),
-        renderedDescriptionText: text,
-      }
-    } catch {
-      return { descriptionError: 'Unable to render the description preview.' }
+  const disposeDetail = (): void => {
+    const session = detailSession
+    detailSession = undefined
+    detailFrame = undefined
+    detailStartupFailed = false
+    if (session) {
+      session.controller.abort()
+      void Promise.try(() => session.dispatch({ type: 'dispose' })).catch(
+        () => {
+          // The worker may already be shutting down.
+        },
+      )
     }
   }
-  const renderDescription = async (text: string): Promise<void> => {
-    const {
-      editDescription,
-      editingCard,
-      renderedDescription,
-      renderedDescriptionText,
-    } = state
-    if (!text || !editingCard || editDescription || disposed) return
-    if (renderedDescriptionText === text && renderedDescription) return
-    const key = `${editingCard.id}\0${text}`
-    if (pendingDescriptionKey === key) return
-    const requestGeneration = ++descriptionGeneration
-    const cardId = editingCard.id
-    pendingDescriptionKey = key
-    state = {
-      ...state,
-      descriptionError: undefined,
-      descriptionRendering: true,
-      renderedDescription: undefined,
-      renderedDescriptionText: undefined,
+  const sendDetail = async (action: CardDetailAction): Promise<void> => {
+    const session = detailSession
+    if (!session) return
+    session.pending++
+    try {
+      await session.dispatch(action)
+    } catch {
+      if (session !== detailSession) return
+      disposeDetail()
+      detailStartupFailed = true
+      void notify()
+    } finally {
+      session.pending--
     }
-    await notify()
-    const preview = await prepareDescription(
-      text,
-      detailsController?.signal ?? new AbortController().signal,
-    )
-    const {
-      editDesc: currentEditDesc,
-      editDescription: isEditingDescription,
-      editingCard: currentEditingCard,
-    } = state
-    if (requestGeneration !== descriptionGeneration) return
-    pendingDescriptionKey = undefined
-    if (
-      disposed ||
-      currentEditingCard?.id !== cardId ||
-      currentEditDesc !== text ||
-      isEditingDescription
-    )
-      return
-    state = { ...state, ...preview, descriptionRendering: false }
-    await notify()
   }
   const clearDrag = async (): Promise<void> => {
     const { draggedCardId, dropTargetId } = state
@@ -465,60 +445,51 @@ export const createInstance = async (
     await notify()
   }
   const cancelCardPrefetch = (): void => {
-    cardPrefetch?.controller.abort()
+    cardPrefetch?.abort()
     cardPrefetch = undefined
   }
   const cancel = (preserveDraft = false): void => {
-    const { cardDraft, detailsLoading } = state
+    const { cardDraft } = state
     generation++
-    attachmentUpload = undefined
-    cardSave = undefined
+    disposeDetail()
     cancelCardPrefetch()
     controller?.abort()
     boardRefreshController?.abort()
     boardRefreshController = undefined
-    detailsController?.abort()
     faviconController?.abort()
-    cardMutationController?.abort()
+    dragMutationController?.abort()
     state = {
       ...state,
       authorizationUrl: undefined,
       authorizing: false,
       authorizingCovers: false,
-      cardAction: undefined,
-      cardActionError: undefined,
-      cardActionMessage: undefined,
-      cardActionPanel: undefined,
       cardDraft: preserveDraft && !cardDraft?.saving ? cardDraft : undefined,
       discoveringBoards: false,
-      ...(detailsLoading && {
-        detailsLoading: false,
-        editingCard: undefined,
-      }),
+      editingCardId: undefined,
       listActionsId: undefined,
       loading: false,
-      postingComment: false,
-      savingCard: false,
     }
   }
   const syncBoardHash = (): Promise<void> => {
-    const { boardId, editingCard } = state
-    const cardId = editingCard?.id
-    return setBoardHash(host, getBoardHash(boardId, cardId), () => {
-      const { boardId: currentBoardId, editingCard: currentCard } = state
+    const { boardId, editingCardId } = state
+    return setBoardHash(host, getBoardHash(boardId, editingCardId), () => {
+      const { boardId: currentBoardId, editingCardId: currentCardId } = state
       return (
-        !disposed && currentBoardId === boardId && currentCard?.id === cardId
+        !disposed &&
+        currentBoardId === boardId &&
+        currentCardId === editingCardId
       )
     })
   }
   const closeEditor = (): void => {
-    const { editingCard } = state
-    if (editingCard) {
-      focusRestoreName = `board-card:${editingCard.id}`
+    disposeDetail()
+    const { editingCardId } = state
+    if (editingCardId) {
+      focusRestoreName = `board-card:${editingCardId}`
       focusRestore = !focusRestore
     }
-    state = { ...state, editError: undefined, editingCard: undefined }
-    if (editingCard) void syncBoardHash()
+    state = { ...state, editingCardId: undefined }
+    if (editingCardId) void syncBoardHash()
   }
   const refreshFavicon = (
     id: string,
@@ -584,7 +555,7 @@ export const createInstance = async (
     const { boardId } = state
     cancel()
     host.session.remove(boardId)
-    state = { ...state, board: undefined, editingCard: undefined }
+    state = { ...state, board: undefined, editingCardId: undefined }
     boardLoadError(error)
     await syncTab('Boards')
     await notify()
@@ -675,308 +646,6 @@ export const createInstance = async (
       await notify()
     }
   }
-  const persistCard = async (
-    card: TrelloCard,
-    name: string,
-    desc: string,
-  ): Promise<boolean> => {
-    const requestGeneration = generation
-    const requestController = new AbortController()
-    controller = requestController
-    state = { ...state, editError: undefined, savingCard: true }
-    void notify()
-    try {
-      const updated = await host.updateCard(
-        card.id,
-        name,
-        desc,
-        AbortSignal.any([
-          requestController.signal,
-          AbortSignal.timeout(30_000),
-        ]),
-      )
-      const { board, boardId, details } = state
-      if (disposed || requestGeneration !== generation || !board) return false
-      const attachmentCount = Math.max(
-        updated.attachmentCount ?? 0,
-        details?.attachments.length ?? 0,
-      )
-      const changes = { ...updated, attachmentCount }
-      const updatedCard = { ...card, ...changes }
-      const updatedBoard = {
-        ...board,
-        cards: board.cards.map((item) =>
-          item.id === card.id ? { ...item, ...changes } : item,
-        ),
-      }
-      host.session.set(boardId, { board: updatedBoard })
-      state = {
-        ...state,
-        board: updatedBoard,
-        ...(details && { details: { ...details, desc } }),
-        editingCard: updatedCard,
-        savingCard: false,
-      }
-      void notify()
-      return true
-    } catch (error) {
-      if (disposed || requestGeneration !== generation) return false
-      state = {
-        ...state,
-        editError:
-          error instanceof TrelloError
-            ? error.details.message
-            : 'Unable to save this card. Check your connection and try again.',
-        savingCard: false,
-      }
-      void notify()
-      return false
-    }
-  }
-  const saveCard = async (): Promise<boolean> => {
-    const requestGeneration = generation
-    while (attachmentUpload || cardSave) {
-      if (attachmentUpload) await attachmentUpload
-      else if (cardSave && !(await cardSave)) return false
-      if (requestGeneration !== generation) return false
-    }
-    const {
-      details,
-      detailsError,
-      detailsLoading,
-      editDesc = '',
-      editingCard,
-      editName,
-      postingComment,
-    } = state
-    if (!editingCard || detailsError || detailsLoading) return true
-    if (postingComment) return false
-    const name = editName?.trim() || editingCard.name
-    if (
-      name === editingCard.name &&
-      editDesc === (details?.desc ?? editingCard.desc ?? '')
-    )
-      return true
-    const save = persistCard(editingCard, name, editDesc)
-    cardSave = save
-    try {
-      return await save
-    } finally {
-      if (cardSave === save) cardSave = undefined
-    }
-  }
-  const finishTitleEdit = (): void => {
-    const { editingCard, editingTitle, editName } = state
-    if (!editingCard || !editingTitle) return
-    state = {
-      ...state,
-      editingTitle: false,
-      editName: editName?.trim() || editingCard.name,
-    }
-    void saveCard()
-    void notify()
-  }
-  const dismissEditor = async (): Promise<void> => {
-    const { cardAction, editError, postingComment: alreadyPosting } = state
-    if (alreadyPosting || cardAction) return
-    const requestGeneration = generation
-    const canClose = Boolean(editError) || (await saveCard())
-    const { editingCard, postingComment } = state
-    if (
-      !canClose ||
-      requestGeneration !== generation ||
-      !editingCard ||
-      postingComment
-    )
-      return
-    closeEditor()
-    cancel()
-    void notify()
-  }
-  const closeCardActions = (): void => {
-    state = { ...state, cardActionPanel: undefined }
-    focusCardActions = !focusCardActions
-  }
-  const runCardAction = async (
-    action: NonNullable<BoardState['cardAction']>,
-    perform: (
-      card: TrelloCard,
-      boardId: string,
-      signal: Readonly<AbortSignal>,
-    ) => Promise<void>,
-  ): Promise<void> => {
-    const {
-      boardId,
-      cardAction,
-      detailsLoading,
-      editingCard,
-      postingComment,
-      savingCard,
-    } = state
-    if (
-      !editingCard ||
-      cardAction ||
-      detailsLoading ||
-      postingComment ||
-      savingCard
-    )
-      return
-    const requestController = new AbortController()
-    cardMutationController = requestController
-    const { signal } = requestController
-    state = {
-      ...state,
-      cardAction: action,
-      cardActionError: undefined,
-      cardActionMessage: undefined,
-      cardActionPanel: undefined,
-    }
-    void notify()
-    try {
-      await perform(editingCard, boardId, signal)
-    } catch (error) {
-      if (!signal.aborted) {
-        const failureMessage = {
-          archive:
-            'Unable to archive this card. Refresh the board to check its status before trying again.',
-          copy: 'Unable to copy the card link.',
-          move: 'Unable to move this card. Refresh the board to check its list before trying again.',
-          upload:
-            'Unable to confirm the image upload. Reopen the card to check its attachments before retrying.',
-        }
-        state = {
-          ...state,
-          cardActionError:
-            error instanceof TrelloError
-              ? error.details.message
-              : failureMessage[action],
-        }
-      }
-    } finally {
-      if (cardMutationController === requestController)
-        cardMutationController = undefined
-      if (!signal.aborted) {
-        state = { ...state, cardAction: undefined }
-        if (action !== 'upload') focusCardActions = !focusCardActions
-        void notify()
-      }
-    }
-  }
-  const uploadImages = async (
-    files: readonly File[],
-    selection?: DescriptionSelection,
-  ): Promise<void> => {
-    const { details, detailsError, editDesc = '' } = state
-    if (attachmentUpload || !details || detailsError) return
-    let draft = editDesc
-    let currentSelection = selection
-    const upload = runCardAction('upload', async (card, boardId, signal) => {
-      for (const file of files) {
-        const attachment = await host.addAttachment(card.id, file, signal)
-        const { board, details, editDesc: current = '', editingCard } = state
-        if (signal.aborted || !board || !details || editingCard?.id !== card.id)
-          return
-        const attachmentCount =
-          Math.max(
-            editingCard.attachmentCount ?? 0,
-            details.attachments.length,
-          ) + 1
-        const updatedBoard = {
-          ...board,
-          cards: board.cards.map((item) =>
-            item.id === card.id ? { ...item, attachmentCount } : item,
-          ),
-        }
-        if (currentSelection) {
-          // Preserve typing during the upload if the captured selection is stale.
-          const range =
-            current === draft
-              ? currentSelection
-              : { end: current.length, start: current.length }
-          const insert = insertDescriptionImage(current, range, attachment)
-          draft = insert.text
-          currentSelection = insert.selection
-        }
-        host.session.set(boardId, { board: updatedBoard })
-        state = {
-          ...state,
-          board: updatedBoard,
-          details: {
-            ...details,
-            attachments: [...details.attachments, attachment],
-          },
-          editingCard: { ...editingCard, attachmentCount },
-          ...(selection && { editDesc: draft, editError: undefined }),
-        }
-        void notify()
-      }
-    })
-    attachmentUpload = upload
-    try {
-      await upload
-    } finally {
-      if (attachmentUpload === upload) attachmentUpload = undefined
-    }
-  }
-  const copyCardLink = (): Promise<void> =>
-    runCardAction('copy', async (card, boardId, signal) => {
-      const currentUrl = getUrl(await getHrefFromHost(host))
-      signal.throwIfAborted()
-      const url =
-        currentUrl &&
-        ['https:', 'http:'].includes(currentUrl.protocol) &&
-        isBoardPath(currentUrl.pathname)
-          ? currentUrl
-          : getUrl(hostedBoardUrl)
-      if (!url) throw new Error('Card URL unavailable')
-      url.hash = getBoardHash(boardId, card.id)
-      await host.writeClipboardText(url.href)
-      if (!signal.aborted)
-        state = { ...state, cardActionMessage: 'Card link copied.' }
-    })
-  const changeCardPlacement = (listId?: string): Promise<void> =>
-    runCardAction(
-      listId ? 'move' : 'archive',
-      async (card, boardId, signal) => {
-        if (!(await saveCard()) || signal.aborted) return
-        if (listId) await host.moveCard(card.id, listId, signal)
-        else await host.archiveCard(card.id, signal)
-        const { board, editingCard, searchResults } = state
-        if (signal.aborted || !board || !editingCard) return
-        const cards = listId
-          ? board.cards.map((item) =>
-              item.id === card.id ? { ...item, idList: listId } : item,
-            )
-          : board.cards.filter(({ id }) => id !== card.id)
-        const nextBoard = { ...board, cards }
-        host.session.set(boardId, { board: nextBoard })
-        state = { ...state, board: nextBoard }
-        if (listId) {
-          state = { ...state, editingCard: { ...editingCard, idList: listId } }
-          return
-        }
-        state = {
-          ...state,
-          searchResults:
-            searchResults?.filter(
-              (result) => result.kind !== 'card' || result.id !== card.id,
-            ) || [],
-        }
-        closeEditor()
-        focusRestoreName = 'board-overview'
-        cancel()
-        void notify()
-      },
-    )
-  const moveCardToList = async (listId: string): Promise<void> => {
-    const { board, editingCard } = state
-    if (
-      listId !== editingCard?.idList &&
-      board?.lists.some(({ id }) => id === listId)
-    ) {
-      await changeCardPlacement(listId)
-    }
-  }
   const moveCard = async (listName: string): Promise<void> => {
     const { board: currentBoard, draggedCardId } = state
     const target = getMoveTarget(currentBoard, draggedCardId, listName)
@@ -994,7 +663,7 @@ export const createInstance = async (
     }
     const requestGeneration = generation
     const requestController = new AbortController()
-    cardMutationController = requestController
+    dragMutationController = requestController
     state = {
       ...state,
       board: nextBoard,
@@ -1030,8 +699,8 @@ export const createInstance = async (
         }
       }
     }
-    if (cardMutationController === requestController)
-      cardMutationController = undefined
+    if (dragMutationController === requestController)
+      dragMutationController = undefined
     await notify()
   }
   const disconnect = async (): Promise<void> => {
@@ -1354,11 +1023,11 @@ export const createInstance = async (
     await notify()
   }
   const createCard = async (): Promise<void> => {
-    const { authorizing, board, boardId, cardDraft, editingCard, loading } =
+    const { authorizing, board, boardId, cardDraft, editingCardId, loading } =
       state
     if (
       !board ||
-      editingCard ||
+      editingCardId ||
       !cardDraft ||
       cardDraft.saving ||
       authorizing ||
@@ -1408,9 +1077,9 @@ export const createInstance = async (
     await notify()
   }
   const openNewCard = (listId: string): void => {
-    const { authorizing, board, cardDraft, editingCard, loading } = state
+    const { authorizing, board, cardDraft, editingCardId, loading } = state
     if (
-      !editingCard &&
+      !editingCardId &&
       !loading &&
       !authorizing &&
       !cardDraft?.saving &&
@@ -1476,15 +1145,11 @@ export const createInstance = async (
     void notify()
   }
   const handleInput = (name: string | undefined, value: string): void => {
-    const { cardDraft, editingCard, postingComment } = state
+    const { cardDraft } = state
     switch (name) {
       case 'board-card-title':
         if (cardDraft && !cardDraft.saving)
           state = { ...state, cardDraft: { ...cardDraft, title: value } }
-        break
-      case 'board-comment-text':
-        if (editingCard && !postingComment)
-          state = { ...state, commentDraft: value, commentError: undefined }
         break
       case 'board-id':
         cancel()
@@ -1503,19 +1168,11 @@ export const createInstance = async (
         }
         startSearch(value)
         break
-      case 'edit-card-desc':
-        descriptionGeneration++
-        pendingDescriptionKey = undefined
-        state = { ...state, editDesc: value, editError: undefined }
-        break
-      case 'edit-card-name':
-        state = { ...state, editError: undefined, editName: value }
-        break
     }
   }
   const prefetchCard = (name: string): void => {
-    const { board, editingCard, loading } = state
-    if (disposed || editingCard || loading || !name.startsWith('board-card:'))
+    const { board, editingCardId, loading } = state
+    if (disposed || editingCardId || loading || !name.startsWith('board-card:'))
       return
     const id = name.slice('board-card:'.length)
     if (!board?.cards.some((card) => card.id === id)) return
@@ -1538,6 +1195,7 @@ export const createInstance = async (
     }
     const result = load()
     cardPrefetch = {
+      abort: (): void => requestController.abort(),
       get completedAt(): number | undefined {
         return completedAt
       },
@@ -1546,184 +1204,104 @@ export const createInstance = async (
         if (cached) show(cached)
         return result
       },
-      controller: requestController,
       id,
-    }
-  }
-  const showDetails = (
-    details: CardDetails,
-    loading: boolean,
-    preview?: Awaited<ReturnType<typeof prepareDescription>>,
-  ): void => {
-    const { details: previousDetails, editDesc } = state
-    const firstDetails = !previousDetails
-    const descriptionChanged = firstDetails || editDesc !== details.desc
-    if (descriptionChanged) {
-      descriptionGeneration++
-      pendingDescriptionKey = undefined
-    }
-    state = {
-      ...state,
-      details,
-      detailsLoading: loading,
-      editDesc: details.desc,
-      ...(descriptionChanged && {
-        descriptionError: undefined,
-        descriptionRendering: false,
-        renderedDescription: undefined,
-        renderedDescriptionText: undefined,
-        ...preview,
-      }),
-    }
-    if (firstDetails) focusEditor = !focusEditor
-    if (descriptionChanged && !preview && details.desc) {
-      void renderDescription(details.desc)
-    } else {
-      void notify()
-    }
-  }
-  const postComment = async (): Promise<void> => {
-    const {
-      board,
-      boardId,
-      cardAction,
-      commentDraft,
-      details,
-      detailsError,
-      detailsLoading,
-      editingCard,
-      postingComment,
-      savingCard,
-    } = state
-    const text = commentDraft?.trim()
-    const signal = detailsController?.signal
-    if (
-      !text ||
-      cardAction ||
-      !board ||
-      !editingCard ||
-      !details ||
-      !signal ||
-      detailsError ||
-      detailsLoading ||
-      postingComment ||
-      savingCard
-    )
-      return
-
-    state = { ...state, commentError: undefined, postingComment: true }
-    void notify()
-    try {
-      const activity = await host.addComment(editingCard.id, text, signal)
-      if (disposed || signal.aborted) return
-      const commentCount = (editingCard.commentCount ?? 0) + 1
-      const updatedBoard = {
-        ...board,
-        cards: board.cards.map((card) =>
-          card.id === editingCard.id ? { ...card, commentCount } : card,
-        ),
-      }
-      host.session.set(boardId, { board: updatedBoard })
-      state = {
-        ...state,
-        board: updatedBoard,
-        commentDraft: '',
-        details: { ...details, activities: [activity, ...details.activities] },
-        editingCard: { ...editingCard, commentCount },
-        postingComment: false,
-      }
-    } catch (error) {
-      if (disposed || signal.aborted) return
-      state = {
-        ...state,
-        commentError:
-          error instanceof TrelloError
-            ? error.details.message
-            : 'Unable to confirm the comment. Check the activity before retrying.',
-        postingComment: false,
-      }
-    }
-    focusComment = !focusComment
-    void notify()
-  }
-  const loadCardDetails = async (
-    loadPrefetched?: LoadPrefetchedCard,
-  ): Promise<void> => {
-    const {
-      cardAction,
-      detailsLoading,
-      editingCard,
-      postingComment,
-      savingCard,
-    } = state
-    if (
-      !editingCard ||
-      savingCard ||
-      detailsLoading ||
-      postingComment ||
-      cardAction
-    )
-      return
-    // A retry can keep rendering the cached description while it refreshes.
-    if (!detailsController || detailsController.signal.aborted) {
-      detailsController = new AbortController()
-    }
-    const { signal } = detailsController
-    const isCurrent = (): boolean => !disposed && !signal.aborted
-    state = { ...state, detailsError: undefined, detailsLoading: true }
-    const showCached = (details: CardDetails): void => {
-      const { details: previousDetails } = state
-      if (isCurrent() && !previousDetails) showDetails(details, true)
-    }
-    try {
-      const details = await (loadPrefetched
-        ? loadPrefetched(showCached)
-        : host.loadCard(editingCard.id, signal, showCached))
-      if (!isCurrent()) return
-      if (!details) throw new Error('Card details request failed')
-      // Keep the existing staged opening on a cold load.
-      const { details: previousDetails } = state
-      const preview = previousDetails
-        ? undefined
-        : await prepareDescription(details.desc, signal)
-      if (isCurrent()) showDetails(details, false, preview)
-    } catch {
-      if (!isCurrent()) return
-      const { details } = state
-      if (!details) focusEditor = !focusEditor
-      state = {
-        ...state,
-        detailsError: details
-          ? 'Unable to refresh card details. Try again.'
-          : 'Unable to load card details. Try again.',
-        detailsLoading: false,
-      }
-      await notify()
     }
   }
   const showCard = (
     card: TrelloCard,
-    loadPrefetched?: LoadPrefetchedCard,
+    prefetch?: Readonly<CardPrefetch>,
   ): void => {
-    state = {
-      ...state,
-      commentDraft: undefined,
-      commentError: undefined,
-      descriptionError: undefined,
-      descriptionRendering: false,
-      details: undefined,
-      detailsError: undefined,
-      editDesc: card.desc || '',
-      editDescription: false,
-      editError: undefined,
-      editingCard: card,
-      editingTitle: false,
-      editName: card.name,
-      renderedDescription: undefined,
-      renderedDescriptionText: undefined,
-      savingCard: false,
-    }
-    void loadCardDetails(loadPrefetched)
+    disposeDetail()
+    const { board, boardId } = state
+    if (!board) return
+    state = { ...state, editingCardId: card.id }
+    const controller = new AbortController()
+    if (prefetch)
+      controller.signal.addEventListener('abort', prefetch.abort, {
+        once: true,
+      })
+    const { signal } = controller
+    let loadPrefetched = prefetch?.consume
+    const dispatch = connectDetail({
+      addAttachment: (file) => host.addAttachment(card.id, file, signal),
+      addComment: (text) => host.addComment(card.id, text, signal),
+      applyChange(changes): void {
+        const { board: current } = state
+        if (!current || signal.aborted) return
+        const cards = changes
+          ? current.cards.map((item) =>
+              item.id === card.id ? { ...item, ...changes } : item,
+            )
+          : current.cards.filter(({ id }) => id !== card.id)
+        const nextBoard = { ...current, cards }
+        host.session.set(boardId, { board: nextBoard })
+        state = { ...state, board: nextBoard }
+      },
+      archiveCard: () => host.archiveCard(card.id, signal),
+      close(archived): void {
+        if (signal.aborted) return
+        if (archived) {
+          const { searchResults = [] } = state
+          state = {
+            ...state,
+            searchResults: searchResults.filter(
+              (result) => result.kind !== 'card' || result.id !== card.id,
+            ),
+          }
+        }
+        closeEditor()
+        if (archived) focusRestoreName = 'board-overview'
+        cancel()
+        void notify()
+      },
+      async copyCardLink(): Promise<void> {
+        const currentUrl = getUrl(await getHrefFromHost(host))
+        signal.throwIfAborted()
+        const url =
+          currentUrl &&
+          ['https:', 'http:'].includes(currentUrl.protocol) &&
+          isBoardPath(currentUrl.pathname)
+            ? currentUrl
+            : getUrl(hostedBoardUrl)
+        if (!url) throw new Error('Card URL unavailable')
+        url.hash = getBoardHash(boardId, card.id)
+        await host.writeClipboardText(url.href)
+      },
+      loadCard(): Promise<CardDetails | undefined> {
+        const load = loadPrefetched
+        loadPrefetched = undefined
+        const showCached = (details: CardDetails): void => {
+          if (!signal.aborted) void sendDetail({ details, type: 'cached' })
+        }
+        return load
+          ? load(showCached)
+          : host.loadCard(card.id, signal, showCached)
+      },
+      loadDescriptionImages: (markdown) =>
+        host.loadDescriptionImages(markdown, signal),
+      moveCard: (listId) => host.moveCard(card.id, listId, signal),
+      publish(frame): void {
+        if (signal.aborted) return
+        detailFrame = frame
+        detailFocus = frame.focus
+        void notify()
+      },
+      renderDescriptionMarkdown: host.renderDescriptionMarkdown,
+      updateCard: (name, desc) =>
+        host.updateCard(
+          card.id,
+          name,
+          desc,
+          AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+        ),
+    })
+    detailSession = { controller, dispatch, pending: 0 }
+    void sendDetail({
+      card,
+      focus: detailFocus,
+      lists: board.lists,
+      type: 'open',
+    })
   }
   const restoreLinkedCard = (board: TrelloBoard, cardId: string): void => {
     const card = board.cards.find((item) => item.id === cardId)
@@ -1733,32 +1311,19 @@ export const createInstance = async (
   const canRefreshBoard = ({
     accountConnected,
     board,
-    cardAction,
     cardDraft,
-    commentDraft,
-    detailsLoading,
     draggedCardId,
-    editDescription,
-    editError,
-    editingTitle,
+    editingCardId,
     loading,
-    postingComment,
-    savingCard,
   }: BoardState): boolean =>
     Boolean(
       accountConnected &&
       board &&
-      !cardAction &&
       !cardDraft?.saving &&
-      !commentDraft &&
-      !detailsLoading &&
       !draggedCardId &&
-      !editDescription &&
-      !editError &&
-      !editingTitle &&
       !loading &&
-      !postingComment &&
-      !savingCard,
+      (!editingCardId ||
+        (detailFrame && !detailFrame.busy && !detailSession?.pending)),
     )
   const refreshBoard = async (
     fromCache = false,
@@ -1886,17 +1451,17 @@ export const createInstance = async (
     }
     if (linkedCardId) restoreLinkedCard(updated, linkedCardId)
     syncRefreshedBoardTab(boardId, board.name, updated, sameFavicon)
-    const { details, editingCard } = state
-    if (editingCard) {
-      const card = cards.find(({ id }) => id === editingCard.id)
+    const { editingCardId } = state
+    if (editingCardId) {
+      const card = cards.find(({ id }) => id === editingCardId)
       if (card) {
-        state = { ...state, editingCard: card, editName: card.name }
-        if (details && card.desc !== previousById.get(card.id)?.desc) {
-          showDetails({ ...details, desc: card.desc }, false)
-          return
-        }
+        await sendDetail({
+          card,
+          descriptionChanged: card.desc !== previousById.get(card.id)?.desc,
+          lists: updated.lists,
+          type: 'refresh',
+        })
       } else {
-        detailsController?.abort()
         closeEditor()
       }
     }
@@ -1910,9 +1475,9 @@ export const createInstance = async (
     boardRefreshTimer.unref?.()
   }
   const openCard = (id: string): void => {
-    const { board, savingCard } = state
+    const { board } = state
     const card = board?.cards.find((item) => item.id === id)
-    if (!card || savingCard) return
+    if (!card || detailFrame?.saving) return
     // Reuse an in-flight press or a result that completed during the gesture.
     const prefetch =
       cardPrefetch?.id === id &&
@@ -1922,8 +1487,7 @@ export const createInstance = async (
         : undefined
     if (prefetch) cardPrefetch = undefined
     cancel()
-    detailsController = prefetch?.controller
-    showCard(card, prefetch?.consume)
+    showCard(card, prefetch)
     void syncBoardHash()
   }
   const changeBoard = async (name: string | undefined): Promise<void> => {
@@ -1945,13 +1509,11 @@ export const createInstance = async (
       boardId: name?.startsWith('board-select:')
         ? name.slice('board-select:'.length)
         : '',
-      editError: undefined,
-      editingCard: undefined,
+      editingCardId: undefined,
       error: undefined,
       loading: false,
       optionsOpen: false,
       providerSelected: showOverview && Boolean(accountConnected),
-      savingCard: false,
       searchQuery: '',
     }
     const { boardId } = state
@@ -1975,7 +1537,7 @@ export const createInstance = async (
       accountConnected: true,
       board: undefined,
       boardId: result.boardId,
-      editingCard: undefined,
+      editingCardId: undefined,
       error: undefined,
       loading: true,
       searchQuery: '',
@@ -2013,60 +1575,6 @@ export const createInstance = async (
       await notify()
     }
   }
-  const handleDescriptionClick = (name: string | undefined): boolean => {
-    if (name === 'board-description-edit') {
-      const { editDesc, editDescription } = state
-      state = { ...state, editDescription: !editDescription }
-      if (editDescription) {
-        void saveCard()
-        void renderDescription(editDesc || '')
-      } else {
-        focusDescription = !focusDescription
-        descriptionGeneration++
-        pendingDescriptionKey = undefined
-      }
-      return true
-    }
-    if (name === 'board-description-retry') {
-      const { editDesc } = state
-      void renderDescription(editDesc || '')
-      return true
-    }
-    return false
-  }
-  const handleCardActionClick = (name: string | undefined): boolean => {
-    const { cardAction, cardActionPanel, editingCard, loading } = state
-    if (cardAction) return true
-    if (!editingCard || loading) return false
-    if (name === 'board-card-actions') {
-      state = {
-        ...state,
-        cardActionPanel: cardActionPanel ? undefined : 'actions',
-      }
-      return true
-    }
-    if (!cardActionPanel) return false
-    if (name === 'board-card-move') {
-      state = {
-        ...state,
-        cardActionPanel: cardActionPanel === 'move' ? 'actions' : 'move',
-      }
-      return true
-    }
-    if (name === 'board-card-archive') {
-      void changeCardPlacement()
-      return true
-    }
-    if (name === 'board-card-copy-link') {
-      void copyCardLink()
-      return true
-    }
-    if (cardActionPanel === 'move' && name?.startsWith('board-card-move:')) {
-      void moveCardToList(name.slice('board-card-move:'.length))
-      return true
-    }
-    return false
-  }
   const handleClick = async (event: Readonly<ViewEvent>): Promise<void> => {
     if (event.name === 'board-options') {
       const { optionsOpen } = state
@@ -2093,24 +1601,6 @@ export const createInstance = async (
       void openSearchCard(event.name.slice('board-search-card:'.length))
       return
     }
-    if (event.name === 'board-card-details-retry') {
-      void loadCardDetails()
-      return
-    }
-    if (event.name === 'board-card-title-edit') {
-      state = { ...state, editingTitle: true }
-      focusCardTitle = !focusCardTitle
-      return
-    }
-    if (handleDescriptionClick(event.name)) return
-    if (event.name === 'board-card-save-retry') {
-      void saveCard()
-      return
-    }
-    if (event.name === 'board-card-cancel') {
-      void dismissEditor()
-      return
-    }
     await changeBoard(event.name)
     if (event.name === 'board-disconnect') await disconnect()
   }
@@ -2135,10 +1625,6 @@ export const createInstance = async (
       handleInput(event.name, event.value)
       return true
     }
-    if (event.type === 'submit' && event.name === 'board-post-comment') {
-      void postComment()
-      return true
-    }
     if (event.type === 'submit' && event.name === 'board-create-card') {
       void createCard()
       return true
@@ -2152,10 +1638,6 @@ export const createInstance = async (
       // rerender are never queued behind the network request they await.
       state = { ...state, optionsOpen: false }
       void connect()
-      return true
-    }
-    if (event.type === 'blur' && event.name === 'edit-card-name') {
-      finishTitleEdit()
       return true
     }
     return false
@@ -2180,12 +1662,32 @@ export const createInstance = async (
     void action()
     return true
   }
+  const handleCardDetailEvent = async (
+    event: Readonly<ViewEvent>,
+  ): Promise<boolean> => {
+    const { board, editingCardId } = state
+    const { name } = event
+    if (!editingCardId || !isCardDetailEvent(name)) return false
+    if (name === 'board-card-cancel' && !detailSession) {
+      closeEditor()
+    } else if (name === 'board-card-details-retry' && detailStartupFailed) {
+      const card = board?.cards.find(({ id }) => id === editingCardId)
+      if (card) showCard(card)
+    } else {
+      await sendDetail({ event, type: 'event' })
+    }
+    return true
+  }
+  const getDetailDialog = (): Node | undefined => {
+    const { editingCardId } = state
+    if (!editingCardId) return undefined
+    if (detailStartupFailed) return renderCardStartupError()
+    return detailFrame?.dialog ?? renderCardLoading()
+  }
   const instance: BoardViewInstance = {
     dispose(): void {
       disposed = true
       clearTimeout(boardRefreshTimer)
-      descriptionGeneration++
-      pendingDescriptionKey = undefined
       cancel()
       searchGeneration++
       searchController?.abort()
@@ -2199,11 +1701,7 @@ export const createInstance = async (
       })()
     },
     getContext: () => ({
-      focusCardActions,
-      focusCardTitle,
-      focusComment,
-      focusDescription,
-      focusEditor,
+      ...detailFocus,
       focusNewCard,
       focusRestore,
     }),
@@ -2213,13 +1711,14 @@ export const createInstance = async (
       void clearDrag()
     },
     handleBoardDragOver(name: string): void {
-      const { board, draggedCardId, dropTargetId, editingCard, loading } = state
+      const { board, draggedCardId, dropTargetId, editingCardId, loading } =
+        state
       const listId = name.startsWith('board-list:')
         ? name.slice('board-list:'.length)
         : ''
       if (
         loading ||
-        editingCard ||
+        editingCardId ||
         !draggedCardId ||
         !board?.lists.some(({ id }) => id === listId) ||
         dropTargetId === listId
@@ -2229,13 +1728,13 @@ export const createInstance = async (
       void notify()
     },
     handleBoardDragStart(name: string): void {
-      const { board, editingCard, loading } = state
+      const { board, editingCardId, loading } = state
       const cardId = name.startsWith('board-card:')
         ? name.slice('board-card:'.length)
         : ''
       if (
         loading ||
-        editingCard ||
+        editingCardId ||
         !board?.cards.some((card) => card.id === cardId)
       )
         return
@@ -2253,17 +1752,13 @@ export const createInstance = async (
           file instanceof File && file.type.startsWith('image/'),
       )
       if (images.length === 0) return
-      const { editDesc = '', editDescription } = state
-      const { length } = editDesc
-      const selection =
-        targetName === 'edit-card-desc' && editDescription
-          ? {
-              end: typeof selectionEnd === 'number' ? selectionEnd : length,
-              start:
-                typeof selectionStart === 'number' ? selectionStart : length,
-            }
-          : undefined
-      void uploadImages(images, selection)
+      void sendDetail({
+        files: images,
+        selectionEnd,
+        selectionStart,
+        targetName,
+        type: 'paste',
+      })
     },
     handleCardPointerDown(
       name: string,
@@ -2278,28 +1773,7 @@ export const createInstance = async (
       ctrlKey?: unknown,
       isComposing?: unknown,
     ): void {
-      const {
-        cardActionPanel,
-        editDescription,
-        editingCard,
-        editingTitle,
-        listActionsId,
-        optionsOpen,
-      } = state
-      if (
-        key === 'Enter' &&
-        ctrlKey === true &&
-        isComposing !== true &&
-        targetName === 'edit-card-desc' &&
-        editDescription
-      ) {
-        handleDescriptionClick('board-description-edit')
-        return
-      }
-      if (key === 'Escape' && cardActionPanel) {
-        closeCardActions()
-        return
-      }
+      const { editingCardId, listActionsId, optionsOpen } = state
       if (key === 'Escape' && listActionsId) {
         state = { ...state, listActionsId: undefined }
         focusRestoreName = `list-actions:${listActionsId}`
@@ -2310,14 +1784,15 @@ export const createInstance = async (
         state = { ...state, optionsOpen: false }
         return
       }
-      if (key === 'Escape' && editingCard) void dismissEditor()
-      if (key === 'Enter' && editingTitle) {
-        focusCardTitle = !focusCardTitle
-        finishTitleEdit()
+      if (key === 'Escape' && !detailSession && editingCardId) {
+        closeEditor()
+        return
       }
+      void sendDetail({ ctrlKey, isComposing, key, targetName, type: 'key' })
     },
     handleDialogOverlayClick(className: unknown): void {
-      if (className === 'BoardDialogOverlay') void dismissEditor()
+      if (className === 'BoardDialogOverlay')
+        void sendDetail({ type: 'overlay' })
     },
     async handleEvent(event: Readonly<ViewEvent>): Promise<void> {
       if (event.type === 'click') {
@@ -2333,6 +1808,7 @@ export const createInstance = async (
         }
         if (listActionsId) state = { ...state, listActionsId: undefined }
       }
+      if (await handleCardDetailEvent(event)) return
       if (await handleSearchEvent(event)) return
       if (handleNonClickEvent(event)) return
       if (isCardTitleBlur(event)) {
@@ -2341,34 +1817,33 @@ export const createInstance = async (
         return
       }
       if (event.type === 'click') {
-        if (handleCardActionClick(event.name) || handleActionClick(event.name))
-          return
+        if (handleActionClick(event.name)) return
         await handleClick(event)
       }
     },
-    render: () => render(state),
+    render: () => render(state, getDetailDialog()),
     renderFocus: (
       oldContext: Readonly<Record<string, boolean>>,
       newContext: Readonly<Record<string, boolean>>,
     ): string => {
-      const { cardDraft, editingCard, editingTitle } = state
+      const { cardDraft, editingCardId } = state
       if (
-        editingCard &&
+        editingCardId &&
         oldContext.focusCardTitle !== newContext.focusCardTitle
       )
-        return editingTitle
+        return detailFrame?.editingTitle
           ? '[name="edit-card-name"]'
           : '[name="board-card-title-edit"]'
       if (
-        editingCard &&
+        editingCardId &&
         oldContext.focusDescription !== newContext.focusDescription
       )
         return '[name="edit-card-desc"]'
       if (oldContext.focusCardActions !== newContext.focusCardActions)
         return '[name="board-card-actions"]'
-      if (editingCard && oldContext.focusComment !== newContext.focusComment)
+      if (editingCardId && oldContext.focusComment !== newContext.focusComment)
         return '[name="board-comment-text"]'
-      if (oldContext.focusEditor !== newContext.focusEditor && editingCard)
+      if (oldContext.focusEditor !== newContext.focusEditor && editingCardId)
         return '[role="dialog"]'
       if (oldContext.focusNewCard !== newContext.focusNewCard && cardDraft)
         return '[name="board-card-title"]'
