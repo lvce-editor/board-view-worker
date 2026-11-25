@@ -815,7 +815,8 @@ const renderCardDialog = (state: BoardState): Dom.Node | undefined => {
         ]),
         Dom.div('BoardDialogBody', [
           Dom.div('BoardDialogMain', [
-            ...renderCardActionFeedback(state),
+            // Keep the following form fields in place as feedback appears and disappears.
+            Dom.div('BoardCardActionFeedback', renderCardActionFeedback(state)),
             Dom.heading(2, 'BoardDialogTitle', [
               editingTitle
                 ? Dom.node(VirtualDomElements.Input, {

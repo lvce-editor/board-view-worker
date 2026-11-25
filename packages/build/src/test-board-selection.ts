@@ -1223,12 +1223,20 @@ export const testBoardSelection = async (
           start: beforeSelection.length,
         },
       )
+    const assertDescriptionFocused = (message: string): Promise<void> =>
+      markdownSource.evaluate((element, message) => {
+        if (document.activeElement !== element) throw new Error(message)
+      }, message)
+    await assertDescriptionFocused('Description is focused before pasting')
     assert.equal(await paste(false), true, 'Native text paste is allowed')
     await paste(true)
     await dialog
       .getByRole('alert')
       .filter({ hasText: 'Trello rejected this image' })
       .waitFor()
+    await assertDescriptionFocused(
+      'Description stays focused after a failed upload',
+    )
     assert.equal(uploadRequests, 1, 'Only images are uploaded')
     assert.equal(await markdownSource.inputValue(), descriptionDraft)
     await paste(true)
@@ -1240,6 +1248,7 @@ export const testBoardSelection = async (
       await dialog.getByRole('button', { name: 'Close card' }).isDisabled(),
       true,
     )
+    await assertDescriptionFocused('Description stays focused during an upload')
     releaseAttachment.resolve()
     const attachmentLink = dialog.getByRole('link', {
       name: pastedAttachment.name,
@@ -1252,6 +1261,11 @@ export const testBoardSelection = async (
     const savedDescriptionWithImage =
       beforeSelection + pastedMarkdown + afterSelection
     assert.equal(await markdownSource.inputValue(), savedDescriptionWithImage)
+    await dialog
+      .getByRole('status')
+      .filter({ hasText: 'Uploading images' })
+      .waitFor({ state: 'detached' })
+    await assertDescriptionFocused('Description stays focused after an upload')
     await dialog.getByRole('button', { exact: true, name: 'Preview' }).click()
     const inlineImage = descriptionPreview.getByRole('img', {
       name: 'pasted.png',
