@@ -1,4 +1,5 @@
 import type { ViewEvent } from '@lvce-editor/api'
+import { VirtualDomElements } from '@lvce-editor/virtual-dom-worker'
 import type { CardAttachment, CardDetails } from '../BoardView/CardDetails.ts'
 import type { TrelloCard } from '../BoardView/Trello.ts'
 import type {
@@ -7,7 +8,11 @@ import type {
   ConnectCardDetail,
 } from './CardDetailProtocol.ts'
 import { TrelloError } from '../BoardView/TrelloError.ts'
-import { renderCardDialog, type CardDetailState } from './RenderCardDetail.ts'
+import {
+  renderCardDialog,
+  type CardDetailState,
+  type ImagePreview,
+} from './RenderCardDetail.ts'
 
 const markdownImageAltCharacters = /[[\]\\\r\n]/gu
 
@@ -44,6 +49,7 @@ export const createCardDetail: ConnectCardDetail = (host) => {
   let attachmentUpload: Promise<void> | undefined
   let cardSave: Promise<boolean> | undefined
   let focus: CardDetailFocus
+  let imagePreviewFocus: string | undefined
   const notify = (): void => {
     if (disposed || publishedState === state) return
     publishedState = state
@@ -54,6 +60,7 @@ export const createCardDetail: ConnectCardDetail = (host) => {
       editDescription,
       editError,
       editingTitle,
+      imagePreview,
       postingComment,
       savingCard,
     } = state
@@ -65,12 +72,14 @@ export const createCardDetail: ConnectCardDetail = (host) => {
         editDescription ||
         editError ||
         editingTitle ||
+        imagePreview ||
         postingComment ||
         savingCard,
       ),
       dialog: renderCardDialog(state),
       editingTitle: Boolean(editingTitle),
       focus,
+      imagePreviewFocus,
       saving: Boolean(savingCard),
     })
   }
@@ -537,24 +546,70 @@ export const createCardDetail: ConnectCardDetail = (host) => {
     }
     return false
   }
-  const handleEvent = ({ name, type, value }: Readonly<ViewEvent>): void => {
-    const { postingComment } = state
-    if (type === 'input' && typeof value === 'string') {
-      if (name === 'board-comment-text' && !postingComment)
-        state = { ...state, commentDraft: value, commentError: undefined }
-      else if (name === 'edit-card-desc') {
-        descriptionGeneration++
-        pendingDescriptionKey = undefined
-        state = { ...state, editDesc: value, editError: undefined }
-      } else if (name === 'edit-card-name')
-        state = { ...state, editError: undefined, editName: value }
+  const closeImagePreview = (): void => {
+    const { imagePreview } = state
+    if (!imagePreview) return
+    imagePreviewFocus = imagePreview.trigger
+    focus = { ...focus, focusImagePreview: !focus.focusImagePreview }
+    state = { ...state, imagePreview: undefined }
+  }
+  const openImagePreview = (
+    name: string,
+    src: string,
+    trigger: string,
+  ): ImagePreview => {
+    const imagePreview = { name, src, trigger }
+    imagePreviewFocus = 'board-image-preview-close'
+    focus = { ...focus, focusImagePreview: !focus.focusImagePreview }
+    state = { ...state, imagePreview }
+    return imagePreview
+  }
+  const handleImageClick = (trigger: string | undefined): boolean => {
+    const { details, renderedDescription } = state
+    if (trigger?.startsWith('board-attachment-image:')) {
+      const index = Number(trigger.slice('board-attachment-image:'.length))
+      const attachment = details?.attachments[index]
+      if (!attachment?.previewSrc) return true
+      const preview = openImagePreview(
+        attachment.name,
+        attachment.previewSrc,
+        trigger,
+      )
+      if (attachment.previewUrl !== attachment.url) {
+        void host
+          .loadAttachmentImage(attachment.url)
+          .then((src) => {
+            const { imagePreview } = state
+            if (disposed || !src || imagePreview !== preview) return
+            state = { ...state, imagePreview: { ...preview, src } }
+            notify()
+          })
+          .catch(() => {
+            // The loaded thumbnail remains available if the original fails.
+          })
+      }
+      return true
     }
-    if (type === 'blur' && name === 'edit-card-name') finishTitleEdit()
-    if (type === 'submit' && name === 'board-post-comment') void postComment()
+    if (!trigger?.startsWith('board-description-image:')) return false
+    const index = Number(trigger.slice('board-description-image:'.length))
+    const image = renderedDescription?.[index]
     if (
-      type !== 'click' ||
+      image?.type === VirtualDomElements.Img &&
+      typeof image.src === 'string'
+    ) {
+      const name =
+        typeof image.alt === 'string' && image.alt
+          ? image.alt
+          : 'Description image'
+      openImagePreview(name, image.src, trigger)
+    }
+    return true
+  }
+  const handleClick = (name: string | undefined): void => {
+    if (
       handleCardActionClick(name) ||
-      handleDescriptionClick(name)
+      handleDescriptionClick(name) ||
+      handleImageClick(name)
     )
       return
     switch (name) {
@@ -572,6 +627,26 @@ export const createCardDetail: ConnectCardDetail = (host) => {
         focus = { ...focus, focusCardTitle: !focus.focusCardTitle }
         break
     }
+  }
+  const handleEvent = ({ name, type, value }: Readonly<ViewEvent>): void => {
+    const { imagePreview, postingComment } = state
+    if (imagePreview) {
+      if (name === 'board-image-preview-close') closeImagePreview()
+      return
+    }
+    if (type === 'input' && typeof value === 'string') {
+      if (name === 'board-comment-text' && !postingComment)
+        state = { ...state, commentDraft: value, commentError: undefined }
+      else if (name === 'edit-card-desc') {
+        descriptionGeneration++
+        pendingDescriptionKey = undefined
+        state = { ...state, editDesc: value, editError: undefined }
+      } else if (name === 'edit-card-name')
+        state = { ...state, editError: undefined, editName: value }
+    }
+    if (type === 'blur' && name === 'edit-card-name') finishTitleEdit()
+    if (type === 'submit' && name === 'board-post-comment') void postComment()
+    if (type === 'click') handleClick(name)
   }
   const open = ({
     card,
@@ -603,7 +678,12 @@ export const createCardDetail: ConnectCardDetail = (host) => {
     key,
     targetName,
   }: Extract<CardDetailAction, { readonly type: 'key' }>): void => {
-    const { cardActionPanel, editDescription, editingTitle } = state
+    const { cardActionPanel, editDescription, editingTitle, imagePreview } =
+      state
+    if (imagePreview) {
+      if (key === 'Escape') closeImagePreview()
+      return
+    }
     if (key === 'Escape') {
       if (cardActionPanel) closeCardActions()
       else void dismissEditor()
@@ -640,6 +720,7 @@ export const createCardDetail: ConnectCardDetail = (host) => {
   }
   return (action) => {
     if (disposed) return
+    const { imagePreview } = state
     switch (action.type) {
       case 'cached': {
         const { details, detailsLoading } = state
@@ -659,10 +740,11 @@ export const createCardDetail: ConnectCardDetail = (host) => {
         open(action)
         break
       case 'overlay':
-        void dismissEditor()
+        if (imagePreview) closeImagePreview()
+        else void dismissEditor()
         break
       case 'paste':
-        handlePaste(action)
+        if (!imagePreview) handlePaste(action)
         break
       case 'refresh':
         refresh(action)

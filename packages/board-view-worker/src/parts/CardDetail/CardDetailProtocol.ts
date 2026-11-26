@@ -13,6 +13,7 @@ export interface CardDetailFocus {
   readonly focusComment: boolean
   readonly focusDescription: boolean
   readonly focusEditor: boolean
+  readonly focusImagePreview: boolean
 }
 
 export interface CardDetailFrame {
@@ -20,6 +21,7 @@ export interface CardDetailFrame {
   readonly dialog: Node | undefined
   readonly editingTitle: boolean
   readonly focus: CardDetailFocus
+  readonly imagePreviewFocus: string | undefined
   readonly saving: boolean
 }
 
@@ -62,6 +64,7 @@ export interface CardDetailHost {
   readonly archiveCard: () => Promise<void>
   readonly close: (archived?: boolean) => void
   readonly copyCardLink: () => Promise<void>
+  readonly loadAttachmentImage: (url: string) => Promise<string | undefined>
   readonly loadCard: () => Promise<CardDetails | undefined>
   readonly loadDescriptionImages: (markdown: Node) => Promise<Node>
   readonly moveCard: (listId: string) => Promise<void>
