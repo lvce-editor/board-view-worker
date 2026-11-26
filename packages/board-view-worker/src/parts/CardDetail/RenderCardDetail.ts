@@ -4,7 +4,7 @@ import {
   mergeClassNames,
   VirtualDomElements,
 } from '@lvce-editor/virtual-dom-worker'
-import type { CardDetails } from '../BoardView/CardDetails.ts'
+import type { CardAttachment, CardDetails } from '../BoardView/CardDetails.ts'
 import type { TrelloCard, TrelloList } from '../BoardView/Trello.ts'
 import { renderCardLoading } from '../BoardView/RenderCardLoading.ts'
 import * as Dom from '../VirtualDom/VirtualDom.ts'
@@ -20,6 +20,12 @@ const cardActionMenuClass = mergeClassNames(
   'BoardCardActionMenu',
 )
 const commentInputClass = mergeClassNames('BoardInput', 'BoardCommentInput')
+
+export interface ImagePreview {
+  readonly name: string
+  readonly src: string
+  readonly trigger: string
+}
 
 export interface CardDetailState {
   readonly cardAction?: 'archive' | 'copy' | 'move' | 'upload' | undefined
@@ -39,6 +45,7 @@ export interface CardDetailState {
   readonly editingCard?: TrelloCard | undefined
   readonly editingTitle?: boolean
   readonly editName?: string
+  readonly imagePreview?: ImagePreview | undefined
   readonly lists: readonly TrelloList[]
   readonly postingComment?: boolean
   readonly renderedDescription?: Dom.Node | undefined
@@ -193,7 +200,21 @@ const renderDescriptionPreview = (state: CardDetailState): Dom.Node => {
   if (!editDesc)
     return Dom.div('BoardDetailEmpty', [Dom.textNode('No description')])
   if (renderedDescriptionText === editDesc && renderedDescription)
-    return renderedDescription
+    return renderedDescription.flatMap((node, index) => {
+      if (node.type !== VirtualDomElements.Img) return [node]
+      return Dom.node(
+        VirtualDomElements.Button,
+        {
+          ariaLabel: `Preview ${node.alt || 'description image'}`,
+          buttonType: 'button',
+          className: 'BoardDescriptionImageTrigger',
+          name: `board-description-image:${index}`,
+          onClick: 'handleClick',
+          style: node.style,
+        },
+        [[{ ...node, style: '' }]],
+      )
+    })
   if (descriptionRendering)
     return Dom.div('BoardDescriptionStatus', [
       Dom.textNode('Rendering preview…'),
@@ -297,6 +318,61 @@ const renderCardActionFeedback = (
     : []
 }
 
+const renderAttachment = (
+  attachment: CardAttachment,
+  index: number,
+): Dom.Node =>
+  Dom.div('BoardAttachment', [
+    ...(attachment.previewSrc
+      ? [
+          Dom.node(
+            VirtualDomElements.Button,
+            {
+              ariaLabel: `Preview ${attachment.name}`,
+              buttonType: 'button',
+              className: 'BoardAttachmentImageTrigger',
+              name: `board-attachment-image:${index}`,
+              onClick: 'handleClick',
+            },
+            [
+              Dom.node(VirtualDomElements.Img, {
+                alt: '',
+                className: 'BoardAttachmentPreview',
+                src: attachment.previewSrc,
+              }),
+            ],
+          ),
+        ]
+      : []),
+    Dom.link(attachment.url, attachment.name, 'BoardAttachmentLink'),
+  ])
+
+const renderImagePreview = ({ name, src }: ImagePreview): Dom.Node =>
+  Dom.node(
+    VirtualDomElements.Div,
+    {
+      ariaLabel: 'Image preview',
+      ariaModal: true,
+      className: 'BoardImagePreviewOverlay',
+      onClick: 'handleDialogOverlayClick',
+      onKeyDown: 'handleDialogKeyDown',
+      role: 'dialog',
+    },
+    [
+      Dom.div('BoardImagePreviewFrame', [
+        Dom.button('board-image-preview-close', '', 'BoardDialogClose', {
+          ariaLabel: 'Close image preview',
+        }),
+        Dom.node(VirtualDomElements.Img, {
+          alt: name,
+          className: 'BoardImagePreviewContent',
+          src,
+        }),
+        Dom.div('BoardImagePreviewCaption', [Dom.textNode(name)]),
+      ]),
+    ],
+  )
+
 export const renderCardDialog = (
   state: CardDetailState,
 ): Dom.Node | undefined => {
@@ -311,6 +387,7 @@ export const renderCardDialog = (
     editingCard,
     editingTitle,
     editName,
+    imagePreview,
     lists,
     postingComment,
     savingCard,
@@ -323,9 +400,10 @@ export const renderCardDialog = (
   const inputsDisabled = cardActionBlocksTextInput(cardAction)
   const status =
     lists.find((list) => list.id === editingCard.idList)?.name || 'Unknown list'
-  return Dom.node(
+  const cardDialog = Dom.node(
     VirtualDomElements.Div,
     {
+      ariaHidden: Boolean(imagePreview),
       ariaLabel: 'Card details',
       ariaModal: true,
       className: 'BoardDialogOverlay',
@@ -422,22 +500,7 @@ export const renderCardDialog = (
               [
                 Dom.heading(3, 'BoardDetailHeading', 'Attachments'),
                 ...(details?.attachments.length
-                  ? details.attachments.map((attachment) =>
-                      Dom.link(
-                        attachment.url,
-                        attachment.name,
-                        'BoardAttachment',
-                        attachment.previewSrc
-                          ? [
-                              Dom.node(VirtualDomElements.Img, {
-                                alt: '',
-                                className: 'BoardAttachmentPreview',
-                                src: attachment.previewSrc,
-                              }),
-                            ]
-                          : [],
-                      ),
-                    )
+                  ? details.attachments.map(renderAttachment)
                   : [
                       Dom.div('BoardDetailEmpty', [
                         Dom.textNode(
@@ -480,4 +543,8 @@ export const renderCardDialog = (
       ]),
     ],
   )
+  return Dom.div('BoardCardDialogs', [
+    cardDialog,
+    ...(imagePreview ? [renderImagePreview(imagePreview)] : []),
+  ])
 }

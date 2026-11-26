@@ -22,7 +22,11 @@ import {
   type CardAttachment,
   type CardDetails,
 } from './CardDetails.ts'
-import { loadDescriptionImages, loadImage } from './DescriptionImages.ts'
+import {
+  loadDescriptionImages,
+  loadImage,
+  trelloImageUrl,
+} from './DescriptionImages.ts'
 import { loadBackgroundImage } from './LoadBackgroundImage.ts'
 import { TrelloError, type BoardError } from './TrelloError.ts'
 
@@ -500,6 +504,10 @@ export interface TrelloClient {
     input: string,
     signal: Readonly<AbortSignal>,
   ) => Promise<TrelloBoard>
+  readonly loadAttachmentImage: (
+    url: string,
+    signal: Readonly<AbortSignal>,
+  ) => Promise<string | undefined>
   readonly loadCard: (
     id: string,
     signal: Readonly<AbortSignal>,
@@ -1393,6 +1401,20 @@ export const createTrelloClient = (
     createCard,
     disconnect,
     load,
+    async loadAttachmentImage(url, signal): Promise<string | undefined> {
+      const source = trelloImageUrl(url)
+      if (!source) return undefined
+      const config = await configuration()
+      const image = await loadImage(
+        source,
+        () => getTrelloAccessToken(signal, config),
+        signal,
+        request,
+        (downloadUrl, downloadSignal) =>
+          downloadAttachment(downloadUrl, downloadSignal, config),
+      )
+      return image?.src
+    },
     loadCard,
     loadDescriptionImages(markdown, signal): Promise<Node> {
       const connect = async (): Promise<{
