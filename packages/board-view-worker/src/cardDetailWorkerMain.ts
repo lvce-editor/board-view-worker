@@ -43,6 +43,7 @@ const createHost = (id: number): CardDetailHost => {
     archiveCard: () => call('archiveCard'),
     close: (archived) => send('close', archived),
     copyCardLink: () => call('copyCardLink'),
+    loadAttachmentImage: (url) => call('loadAttachmentImage', url),
     loadCard: () => call('loadCard'),
     loadDescriptionImages: (markdown) =>
       call('loadDescriptionImages', markdown),

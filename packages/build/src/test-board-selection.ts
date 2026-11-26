@@ -19,8 +19,14 @@ export const testBoardSelection = async (
   const backend = 'https://trello-selection.test'
   const previewPath =
     '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/previews/eeeeeeeeeeeeeeeeeeeeeeee/download/image.png'
-  const attachmentUrl =
-    'https://trello.com/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/download/design.png'
+  const originalImagePath =
+    '/1/cards/aaaaaaaaaaaaaaaaaaaaaaaa/attachments/dddddddddddddddddddddddd/download/design.png'
+  const attachmentUrl = `https://trello.com${originalImagePath}`
+  const originalImage = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAQAAAAGCAIAAABrW6giAAAAEElEQVR4nGNwC54JRwyUcgBXkhyx55dDYgAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  let originalImageLoads = 0
   const pastedUrl = 'https://example.com/wiki/Board_(project)?tab=details'
   const autolinkUrl = 'https://example.com/updates'
   const markdownUrl = 'https://example.com/roadmap'
@@ -145,6 +151,11 @@ export const testBoardSelection = async (
     assert.equal(route.request().headers().authorization, 'Bearer board-test')
     if (path === '/api/integrations/trello/attachment-image') {
       const imagePath = new URL(route.request().url()).searchParams.get('path')
+      if (imagePath === originalImagePath) {
+        originalImageLoads++
+        await route.fulfill({ body: originalImage, contentType: 'image/png' })
+        return
+      }
       if (imagePath === previewPath) {
         imageLoads++
         await releaseImage.promise
@@ -982,10 +993,8 @@ export const testBoardSelection = async (
     assert.ok(detailWorker, 'Opening a card launches the detail worker')
     await dialog.getByText('A detailed description', { exact: false }).waitFor()
     const image = dialog.locator('.BoardDescriptionImage')
-    assert.match(
-      (await image.getAttribute('src')) || '',
-      /^data:image\/png;base64,/u,
-    )
+    const inlineImageSource = await image.getAttribute('src')
+    assert.match(inlineImageSource || '', /^data:image\/png;base64,/u)
     assert.equal(
       await image.evaluate(async (element) => {
         const img = element as HTMLImageElement
@@ -1040,22 +1049,68 @@ export const testBoardSelection = async (
       description,
     )
     assert.deepEqual(moveRequests, [])
-    await dialog.getByRole('button', { name: 'Preview' }).click()
+    await dialog.getByRole('button', { exact: true, name: 'Preview' }).click()
     const designAttachment = dialog.getByRole('link', {
       exact: true,
       name: 'design.png',
     })
     assert.equal(await designAttachment.getAttribute('href'), attachmentUrl)
+    const attachmentTrigger = dialog.getByRole('button', {
+      name: 'Preview design.png',
+    })
+    const preview = page.getByRole('dialog', { name: 'Image preview' })
+    const closePreview = preview.getByRole('button', {
+      name: 'Close image preview',
+    })
     assert.equal(
-      await designAttachment
-        .locator('.BoardAttachmentPreview')
-        .evaluate(async (element) => {
-          const img = element as HTMLImageElement
-          await img.decode()
-          return img.naturalWidth
-        }),
-      2,
+      originalImageLoads,
+      0,
+      'The original attachment is loaded on demand',
     )
+    await attachmentTrigger.click()
+    await closePreview.waitFor()
+    assert.equal(
+      await dialog.count(),
+      0,
+      'Card details are inert while previewing',
+    )
+    await page.waitForFunction(
+      () =>
+        document.activeElement?.getAttribute('name') ===
+        'board-image-preview-close',
+    )
+    const previewImage = preview.getByRole('img', { name: 'design.png' })
+    await page.waitForFunction(
+      () =>
+        document.querySelector<HTMLImageElement>('.BoardImagePreviewContent')
+          ?.naturalWidth === 4,
+    )
+    assert.equal(originalImageLoads, 1)
+    assert.equal(await previewImage.count(), 1)
+    await closePreview.press('Escape')
+    await preview.waitFor({ state: 'hidden' })
+    await dialog.waitFor()
+    await page.waitForFunction(
+      () =>
+        document.activeElement?.getAttribute('name') ===
+        'board-attachment-image:0',
+    )
+
+    const descriptionImageTrigger = dialog.getByRole('button', {
+      name: 'Preview Design diagram',
+    })
+    await descriptionImageTrigger.press('Enter')
+    await closePreview.waitFor()
+    const descriptionImage = preview.getByRole('img', {
+      name: 'Design diagram',
+    })
+    assert.equal(await descriptionImage.getAttribute('src'), inlineImageSource)
+    await page.mouse.click(2, 2)
+    await preview.waitFor({ state: 'hidden' })
+    await descriptionImageTrigger.waitFor()
+    await descriptionImageTrigger.click()
+    await closePreview.click()
+    await preview.waitFor({ state: 'hidden' })
     await dialog.getByText('Created this card', { exact: true }).waitFor()
     await dialog.getByText('Just now', { exact: true }).waitFor()
     await dialog.getByText('1 minute ago', { exact: true }).waitFor()

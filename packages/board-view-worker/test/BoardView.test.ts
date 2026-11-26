@@ -67,6 +67,7 @@ const createHost = (): BoardHost => ({
     .mockResolvedValue('data:image/svg+xml,photo'),
   execute: jest.fn<BoardHost['execute']>().mockResolvedValue(undefined),
   load: jest.fn<BoardHost['load']>().mockResolvedValue(board),
+  loadAttachmentImage: jest.fn<BoardHost['loadAttachmentImage']>(),
   loadCard: jest.fn<BoardHost['loadCard']>().mockImplementation(async (id) => ({
     activities: [],
     attachments: [],

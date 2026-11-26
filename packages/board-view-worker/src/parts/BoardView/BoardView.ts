@@ -67,6 +67,7 @@ const cardDetailEvents = new Set([
   'board-card-save-retry',
   'board-comment-text',
   'board-description-edit',
+  'board-image-preview-close',
   'board-description-retry',
   'board-post-comment',
   'edit-card-desc',
@@ -75,7 +76,11 @@ const cardDetailEvents = new Set([
 
 const isCardDetailEvent = (name: string | undefined): boolean =>
   Boolean(
-    name && (cardDetailEvents.has(name) || name.startsWith('board-card-move:')),
+    name &&
+    (cardDetailEvents.has(name) ||
+      name.startsWith('board-card-move:') ||
+      name.startsWith('board-attachment-image:') ||
+      name.startsWith('board-description-image:')),
   )
 
 export interface BoardHost {
@@ -90,6 +95,7 @@ export interface BoardHost {
   readonly createFavicon: typeof createBoardFavicon
   readonly execute: typeof executeCommand
   readonly load: typeof trelloClient.load
+  readonly loadAttachmentImage: typeof trelloClient.loadAttachmentImage
   readonly loadCard: typeof trelloClient.loadCard
   readonly loadDescriptionImages: typeof trelloClient.loadDescriptionImages
   readonly moveCard: typeof trelloClient.moveCard
@@ -175,6 +181,7 @@ const defaultHost: BoardHost = {
   createFavicon: createBoardFavicon,
   execute: executeCommand,
   load: trelloClient.load,
+  loadAttachmentImage: trelloClient.loadAttachmentImage,
   loadCard: trelloClient.loadCard,
   loadDescriptionImages: trelloClient.loadDescriptionImages,
   moveCard: trelloClient.moveCard,
@@ -391,6 +398,7 @@ export const createInstance = async (
     focusComment: false,
     focusDescription: false,
     focusEditor: false,
+    focusImagePreview: false,
   }
   let detailFrame: CardDetailFrame | undefined
   let detailSession:
@@ -1265,6 +1273,7 @@ export const createInstance = async (
         url.hash = getBoardHash(boardId, card.id)
         await host.writeClipboardText(url.href)
       },
+      loadAttachmentImage: (url) => host.loadAttachmentImage(url, signal),
       loadCard(): Promise<CardDetails | undefined> {
         const load = loadPrefetched
         loadPrefetched = undefined
@@ -1682,6 +1691,29 @@ export const createInstance = async (
     if (detailStartupFailed) return renderCardStartupError()
     return detailFrame?.dialog ?? renderCardLoading()
   }
+  const renderDetailFocus = (
+    oldContext: Readonly<Record<string, boolean>>,
+    newContext: Readonly<Record<string, boolean>>,
+  ): string => {
+    const { editingCardId } = state
+    if (
+      oldContext.focusImagePreview !== newContext.focusImagePreview &&
+      detailFrame?.imagePreviewFocus
+    )
+      return `[name="${detailFrame.imagePreviewFocus}"]`
+    if (
+      editingCardId &&
+      oldContext.focusDescription !== newContext.focusDescription
+    )
+      return '[name="edit-card-desc"]'
+    if (oldContext.focusCardActions !== newContext.focusCardActions)
+      return '[name="board-card-actions"]'
+    if (editingCardId && oldContext.focusComment !== newContext.focusComment)
+      return '[name="board-comment-text"]'
+    if (oldContext.focusEditor !== newContext.focusEditor && editingCardId)
+      return '[role="dialog"]'
+    return ''
+  }
   const instance: BoardViewInstance = {
     dispose(): void {
       disposed = true
@@ -1789,7 +1821,10 @@ export const createInstance = async (
       void sendDetail({ ctrlKey, isComposing, key, targetName, type: 'key' })
     },
     handleDialogOverlayClick(className: unknown): void {
-      if (className === 'BoardDialogOverlay')
+      if (
+        className === 'BoardDialogOverlay' ||
+        className === 'BoardImagePreviewOverlay'
+      )
         void sendDetail({ type: 'overlay' })
     },
     async handleEvent(event: Readonly<ViewEvent>): Promise<void> {
@@ -1824,18 +1859,9 @@ export const createInstance = async (
       oldContext: Readonly<Record<string, boolean>>,
       newContext: Readonly<Record<string, boolean>>,
     ): string => {
-      const { cardDraft, editingCardId } = state
-      if (
-        editingCardId &&
-        oldContext.focusDescription !== newContext.focusDescription
-      )
-        return '[name="edit-card-desc"]'
-      if (oldContext.focusCardActions !== newContext.focusCardActions)
-        return '[name="board-card-actions"]'
-      if (editingCardId && oldContext.focusComment !== newContext.focusComment)
-        return '[name="board-comment-text"]'
-      if (oldContext.focusEditor !== newContext.focusEditor && editingCardId)
-        return '[role="dialog"]'
+      const detailSelector = renderDetailFocus(oldContext, newContext)
+      if (detailSelector) return detailSelector
+      const { cardDraft } = state
       if (oldContext.focusNewCard !== newContext.focusNewCard && cardDraft)
         return '[name="board-card-title"]'
       if (oldContext.focusRestore === newContext.focusRestore) return ''
