@@ -1135,6 +1135,9 @@ export const testBoardSelection = async (
       [4, 4],
       'The first click places the caret after Card',
     )
+    process.stdout.write(
+      'Card title places the caret on the first click: pass\n',
+    )
     await dialog.waitFor()
     await page
       .locator('.BoardDialogOverlay')
@@ -2101,7 +2104,7 @@ export const testBoardSelection = async (
     await page.waitForURL(cardDetailUrl.href)
     await page.reload()
     await dialog
-      .getByRole('button', { exact: true, name: 'Card with cover' })
+      .getByRole('heading', { exact: true, name: 'Card with cover' })
       .waitFor()
     await dialog.getByRole('button', { name: 'Close card' }).click()
     await page.waitForURL(homeBoardUrl.href)
