@@ -878,30 +878,19 @@
   margin: 0 -8px;
   font-size: 26px;
   line-height: 1.25;
-  overflow-wrap: anywhere;
 }
-.BoardDialogTitleButton,
 .BoardDialogTitleInput {
   display: block;
-  box-sizing: border-box;
-  width: 100%;
   padding: 4px 8px;
   border-radius: 4px;
-  font: inherit;
-  text-align: start;
 }
-.BoardDialogTitleButton {
-  border: 1px solid transparent;
+.BoardDialogTitleInput:not(:focus) {
+  border-color: transparent;
   background: transparent;
-  color: inherit;
-  cursor: text;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
 }
-.BoardDialogTitleButton:enabled:hover {
+.BoardDialogTitleInput:enabled:not(:focus):hover {
   background: var(--BoardHover);
-}
-.BoardDialogTitleButton:focus-visible {
-  outline: 2px solid var(--BoardFocus);
 }
 .BoardDialogMain .BoardInput:focus-visible {
   border-color: var(--BoardFocus);

@@ -65,7 +65,6 @@ const cardDetailEvents = new Set([
   'board-card-details-retry',
   'board-card-move',
   'board-card-save-retry',
-  'board-card-title-edit',
   'board-comment-text',
   'board-description-edit',
   'board-image-preview-close',
@@ -396,7 +395,6 @@ export const createInstance = async (
   await syncTab(initialBoard?.name || 'Boards', initialBoard?.faviconUrl)
   let detailFocus: CardDetailFocus = {
     focusCardActions: false,
-    focusCardTitle: false,
     focusComment: false,
     focusDescription: false,
     focusEditor: false,
@@ -1703,13 +1701,6 @@ export const createInstance = async (
       detailFrame?.imagePreviewFocus
     )
       return `[name="${detailFrame.imagePreviewFocus}"]`
-    if (
-      editingCardId &&
-      oldContext.focusCardTitle !== newContext.focusCardTitle
-    )
-      return detailFrame?.editingTitle
-        ? '[name="edit-card-name"]'
-        : '[name="board-card-title-edit"]'
     if (
       editingCardId &&
       oldContext.focusDescription !== newContext.focusDescription

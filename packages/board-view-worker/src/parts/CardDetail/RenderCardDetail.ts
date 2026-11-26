@@ -385,7 +385,6 @@ export const renderCardDialog = (
     editDescription,
     editError,
     editingCard,
-    editingTitle,
     editName,
     imagePreview,
     lists,
@@ -394,10 +393,12 @@ export const renderCardDialog = (
   } = state
   if (!editingCard) return undefined
   if (detailsLoading && !details) return renderCardLoading()
-  const editingDisabled = Boolean(
-    detailsError || detailsLoading || postingComment || cardAction,
+  const detailsUnavailable = Boolean(
+    detailsError || detailsLoading || postingComment,
   )
+  const editingDisabled = detailsUnavailable || Boolean(cardAction)
   const inputsDisabled = cardActionBlocksTextInput(cardAction)
+  const title = editName ?? editingCard.name
   const status =
     lists.find((list) => list.id === editingCard.idList)?.name || 'Unknown list'
   const cardDialog = Dom.node(
@@ -433,27 +434,22 @@ export const renderCardDialog = (
           Dom.div('BoardDialogMain', [
             // Keep the following form fields in place as feedback appears and disappears.
             Dom.div('BoardCardActionFeedback', renderCardActionFeedback(state)),
-            Dom.heading(2, 'BoardDialogTitle', [
-              editingTitle
-                ? Dom.node(VirtualDomElements.Input, {
-                    ariaLabel: 'Title',
-                    className: titleInputClass,
-                    disabled: inputsDisabled,
-                    inputType: 'text',
-                    name: 'edit-card-name',
-                    onBlur: 'handleBlur',
-                    onInput: 'handleInput',
-                    value: editName ?? editingCard.name,
-                  })
-                : Dom.button(
-                    'board-card-title-edit',
-                    editName ?? editingCard.name,
-                    'BoardDialogTitleButton',
-                    {
-                      disabled: editingDisabled,
-                    },
-                  ),
-            ]),
+            Dom.node(
+              VirtualDomElements.H2,
+              { ariaLabel: title, className: 'BoardDialogTitle' },
+              [
+                Dom.node(VirtualDomElements.Input, {
+                  ariaLabel: 'Title',
+                  className: titleInputClass,
+                  disabled: detailsUnavailable || inputsDisabled,
+                  inputType: 'text',
+                  name: 'edit-card-name',
+                  onBlur: 'handleBlur',
+                  onInput: 'handleInput',
+                  value: title,
+                }),
+              ],
+            ),
             Dom.node(
               VirtualDomElements.Section,
               {
