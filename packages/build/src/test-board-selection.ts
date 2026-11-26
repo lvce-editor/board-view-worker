@@ -1847,12 +1847,19 @@ export const testBoardSelection = async (
     const directMarkdownSource = directDialog.getByRole('textbox', {
       name: 'Markdown source',
     })
-    await directMarkdownSource.fill('# Saved with shortcut')
-    await directMarkdownSource.press('End')
+    await directMarkdownSource.focus()
+    const loadedDescription = await directMarkdownSource.evaluate(
+      (element: HTMLTextAreaElement) => {
+        const { value } = element
+        element.setSelectionRange(value.length, value.length)
+        return value
+      },
+    )
+    assert.equal(loadedDescription, savedDescriptionWithImage)
     await directMarkdownSource.press('Enter')
     assert.equal(
       await directMarkdownSource.inputValue(),
-      '# Saved with shortcut\n',
+      `${loadedDescription}\n`,
     )
     assert.equal(cardEdits.length, 1, 'Plain Enter leaves the draft unsaved')
     const updatedDescription = '# Saved with shortcut\nSecond line'
