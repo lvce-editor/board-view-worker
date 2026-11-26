@@ -9,7 +9,6 @@ import type { Node } from '../VirtualDom/VirtualDom.ts'
 
 export interface CardDetailFocus {
   readonly focusCardActions: boolean
-  readonly focusCardTitle: boolean
   readonly focusComment: boolean
   readonly focusDescription: boolean
   readonly focusEditor: boolean
@@ -18,7 +17,6 @@ export interface CardDetailFocus {
 export interface CardDetailFrame {
   readonly busy: boolean
   readonly dialog: Node | undefined
-  readonly editingTitle: boolean
   readonly focus: CardDetailFocus
   readonly saving: boolean
 }

@@ -1061,10 +1061,6 @@ export const testBoardSelection = async (
     await dialog.getByText('1 minute ago', { exact: true }).waitFor()
     await dialog.getByRole('heading', { name: 'Card with cover' }).waitFor()
     assert.equal(
-      await dialog.getByRole('textbox', { name: 'Title' }).count(),
-      0,
-    )
-    assert.equal(
       await dialog
         .getByRole('button', { name: /^(Cancel|Save changes)$/u })
         .count(),
@@ -1114,10 +1110,31 @@ export const testBoardSelection = async (
       await page.screenshot({
         path: process.env.BOARD_DETAIL_MOBILE_SCREENSHOT,
       })
-    await dialog
-      .getByRole('button', { name: 'Card with cover', exact: true })
-      .click()
-    await dialog.getByRole('textbox', { name: 'Title' }).waitFor()
+    const cardTitle = dialog.locator('.BoardDialogTitle > *')
+    const titleClickPosition = await cardTitle.evaluate((element) => {
+      const style = getComputedStyle(element)
+      const text = document.createElement('canvas').getContext('2d')
+      if (!text) throw new Error('Unable to measure the title text')
+      text.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+      return {
+        x:
+          Number.parseFloat(style.borderLeftWidth) +
+          Number.parseFloat(style.paddingLeft) +
+          text.measureText('Card').width,
+        y: element.clientHeight / 2,
+      }
+    })
+    await cardTitle.click({ position: titleClickPosition })
+    const titleInput = dialog.getByRole('textbox', { name: 'Title' })
+    await titleInput.and(page.locator(':focus')).waitFor()
+    assert.deepEqual(
+      await titleInput.evaluate((element: HTMLInputElement) => [
+        element.selectionStart,
+        element.selectionEnd,
+      ]),
+      [4, 4],
+      'The first click places the caret after Card',
+    )
     await dialog.waitFor()
     await page
       .locator('.BoardDialogOverlay')
@@ -1143,10 +1160,7 @@ export const testBoardSelection = async (
       () =>
         globalThis.document.activeElement?.getAttribute('role') === 'dialog',
     )
-    const cachedTitle = dialog.getByRole('button', {
-      name: 'Card with cover',
-      exact: true,
-    })
+    const cachedTitle = dialog.getByRole('textbox', { name: 'Title' })
     assert.equal(await cachedTitle.isDisabled(), true)
     assert.equal(await descriptionEdit.isDisabled(), true)
     const dialogTop = () =>
@@ -1797,16 +1811,10 @@ export const testBoardSelection = async (
     const directDialog = directPage.getByRole('dialog', {
       name: 'Card details',
     })
-    const titleButton = directDialog.getByRole('button', {
-      name: 'Card with cover',
-      exact: true,
-    })
-    await titleButton.waitFor()
-    await directPage.reload()
-    await titleButton.and(directPage.locator('button:enabled')).waitFor()
-    await titleButton.focus()
-    await directPage.keyboard.press('Enter')
     const directTitle = directDialog.getByRole('textbox', { name: 'Title' })
+    await directTitle.waitFor()
+    await directPage.reload()
+    await directTitle.and(directPage.locator('input:enabled')).waitFor()
     assert.equal(await directTitle.inputValue(), 'Card with cover')
     await directTitle.fill('Renamed card')
     const savedTitle = directPage.waitForResponse(

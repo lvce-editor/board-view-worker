@@ -709,7 +709,6 @@ test('saves a title on blur and updates the board after Trello confirms', async 
   expect(JSON.stringify(await view.render())).not.toContain('edit-card-desc')
   await view.handleEvent?.({ name: 'board-description-edit', type: 'click' })
   expect(JSON.stringify(await view.render())).toContain('edit-card-desc')
-  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
   await view.handleEvent?.({
     name: 'edit-card-name',
     type: 'input',
@@ -742,7 +741,6 @@ test('saves description changes when returning to the preview', async () => {
   const view = await openBoard(host)
   await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
   await flush()
-  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
   await view.handleEvent?.({
     name: 'edit-card-name',
     type: 'input',
@@ -788,7 +786,6 @@ test('retains the draft after a failed card save and lets users retry or cancel'
   await flush()
   await view.handleEvent?.({ name: 'board-card:one', type: 'click' })
   await flush()
-  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
   await view.handleEvent?.({
     name: 'edit-card-name',
     type: 'input',
@@ -1373,7 +1370,9 @@ test.each(['navigate', 'disconnect', 'dispose'])(
   },
 )
 
-const openBoard = async (host: BoardHost): Promise<VirtualDomViewInstance> => {
+const openBoard = async (
+  host: BoardHost,
+): Promise<Awaited<ReturnType<typeof createInstance>>> => {
   host.session.set('5k8NLHLh', { board })
   jest.mocked(host.read).mockResolvedValue(['5k8NLHLh'])
   return createInstance(createContext(), host)
@@ -1561,13 +1560,15 @@ test('newly created cards can be edited without losing existing cards', async ()
   await flush()
   await view.handleEvent?.({ name: 'board-card:new', type: 'click' })
   await flush()
-  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
   await view.handleEvent?.({
     name: 'edit-card-name',
     type: 'input',
     value: 'Edited new task',
   })
-  await view.handleEvent?.({ name: 'edit-card-name', type: 'blur' })
+  view.handleDialogKeyDown('Enter', 'edit-card-name', false, true)
+  await flush()
+  expect(host.updateCard).not.toHaveBeenCalled()
+  view.handleDialogKeyDown('Enter', 'edit-card-name', false, false)
   await flush()
   expect(host.updateCard).toHaveBeenCalledWith(
     'new',
@@ -1634,7 +1635,6 @@ test('failed detail loads can be retried and saving waits for complete details',
   expect(JSON.stringify(await view.render())).not.toContain(
     'Unable to load card details',
   )
-  await view.handleEvent?.({ name: 'board-card-title-edit', type: 'click' })
   await view.handleEvent?.({
     name: 'edit-card-name',
     type: 'input',

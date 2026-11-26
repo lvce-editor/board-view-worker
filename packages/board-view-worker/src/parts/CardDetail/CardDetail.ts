@@ -69,7 +69,6 @@ export const createCardDetail: ConnectCardDetail = (host) => {
         savingCard,
       ),
       dialog: renderCardDialog(state),
-      editingTitle: Boolean(editingTitle),
       focus,
       saving: Boolean(savingCard),
     })
@@ -546,8 +545,14 @@ export const createCardDetail: ConnectCardDetail = (host) => {
         descriptionGeneration++
         pendingDescriptionKey = undefined
         state = { ...state, editDesc: value, editError: undefined }
-      } else if (name === 'edit-card-name')
-        state = { ...state, editError: undefined, editName: value }
+      } else if (name === 'edit-card-name') {
+        state = {
+          ...state,
+          editError: undefined,
+          editingTitle: true,
+          editName: value,
+        }
+      }
     }
     if (type === 'blur' && name === 'edit-card-name') finishTitleEdit()
     if (type === 'submit' && name === 'board-post-comment') void postComment()
@@ -566,10 +571,6 @@ export const createCardDetail: ConnectCardDetail = (host) => {
         break
       case 'board-card-save-retry':
         void saveCard()
-        break
-      case 'board-card-title-edit':
-        state = { ...state, editingTitle: true }
-        focus = { ...focus, focusCardTitle: !focus.focusCardTitle }
         break
     }
   }
@@ -603,21 +604,19 @@ export const createCardDetail: ConnectCardDetail = (host) => {
     key,
     targetName,
   }: Extract<CardDetailAction, { readonly type: 'key' }>): void => {
-    const { cardActionPanel, editDescription, editingTitle } = state
+    const { cardActionPanel, editDescription } = state
     if (key === 'Escape') {
       if (cardActionPanel) closeCardActions()
       else void dismissEditor()
     }
-    if (key !== 'Enter') return
+    if (key !== 'Enter' || isComposing === true) return
     if (
       ctrlKey === true &&
-      isComposing !== true &&
       targetName === 'edit-card-desc' &&
       editDescription
     ) {
       handleDescriptionClick('board-description-edit')
-    } else if (editingTitle) {
-      focus = { ...focus, focusCardTitle: !focus.focusCardTitle }
+    } else if (targetName === 'edit-card-name') {
       finishTitleEdit()
     }
   }
